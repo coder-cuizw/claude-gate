@@ -1,0 +1,5 @@
+
+# tsc 误生成的编译产物
+vite.config.js
+vite.config.d.ts
+*.tsbuildinfo

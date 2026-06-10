@@ -1,0 +1,87 @@
+# claude-gate 开发环境编排：一键拉起依赖（PG / ClickHouse / Redis / MinIO）+ 网关 + 前端
+# 用法：cd deploy && docker compose up -d
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: claude
+      POSTGRES_PASSWORD: claude
+      POSTGRES_DB: claude_gate
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U claude"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    environment:
+      CLICKHOUSE_DB: claude_gate
+      CLICKHOUSE_USER: claude
+      CLICKHOUSE_PASSWORD: claude
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # native
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - ch_data:/var/lib/clickhouse
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    ports:
+      - "9100:9000"   # S3 API（避开 ClickHouse 的 9000）
+      - "9001:9001"   # 控制台
+    volumes:
+      - minio_data:/data
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.gateway
+    depends_on:
+      postgres: { condition: service_healthy }
+      clickhouse: { condition: service_started }
+      redis: { condition: service_started }
+      minio: { condition: service_started }
+    environment:
+      CG_POSTGRES_DSN: postgres://claude:claude@postgres:5432/claude_gate?sslmode=disable
+      CG_CLICKHOUSE_DSN: clickhouse://claude:claude@clickhouse:9000/claude_gate
+      CG_REDIS_ADDR: redis:6379
+      CG_S3_ENDPOINT: minio:9000
+      CG_S3_BUCKET: claude-gate
+      CG_JWT_SECRET: please-change-me-in-prod
+      CG_LOG_LEVEL: info
+    ports:
+      - "8080:8080"
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    depends_on:
+      - gateway
+    ports:
+      - "8081:80"
+
+volumes:
+  pg_data:
+  ch_data:
+  redis_data:
+  minio_data:

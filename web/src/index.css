@@ -1,0 +1,136 @@
+/* 字体：Inter（正文）+ Fraunces（衬线标题，营造 Claude 编辑感）+ JetBrains Mono（代码） */
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/fraunces/400.css';
+@import '@fontsource/fraunces/500.css';
+@import '@fontsource/fraunces/600.css';
+@import '@fontsource/jetbrains-mono/400.css';
+
+:root {
+  /* 这些变量由 ThemeProvider 按明暗模式注入到 <html data-theme> 上 */
+  --cg-bg-layout: #f5f4ee;
+  --cg-bg-container: #fcfbf8;
+  --cg-bg-subtle: #efede4;
+  --cg-text: #1f1e1d;
+  --cg-text-secondary: #6b6862;
+  --cg-border: #e5e2d6;
+  --cg-accent: #c45a35;
+  --cg-accent-soft: #f2e4dc;
+}
+
+html[data-theme='dark'] {
+  --cg-bg-layout: #1a1916;
+  --cg-bg-container: #23221e;
+  --cg-bg-subtle: #2f2e29;
+  --cg-text: #f2efe6;
+  --cg-text-secondary: #b7b2a6;
+  --cg-border: #3a382f;
+  --cg-accent: #d97757;
+  --cg-accent-soft: #3a2a22;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  background: var(--cg-bg-layout);
+  color: var(--cg-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* 衬线展示字体：用于 logo、登录大标题、大盘标题数字旁的标语 */
+.cg-serif {
+  font-family: 'Fraunces', 'Songti SC', Georgia, 'Times New Roman', serif;
+  font-optical-sizing: auto;
+  letter-spacing: -0.01em;
+}
+
+.cg-mono {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* 细滚动条，配合暖色调 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--cg-border);
+  border-radius: 6px;
+  border: 2px solid var(--cg-bg-layout);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--cg-text-secondary);
+}
+
+/* 代码块（请求/响应 body 展示） */
+.cg-code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre;
+  overflow: auto;
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: var(--cg-bg-subtle);
+  border: 1px solid var(--cg-border);
+  color: var(--cg-text);
+  max-height: 520px;
+}
+
+/* 登录页背景：暖色径向渐变 + 微光 */
+.cg-login-bg {
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(1100px 620px at 78% -8%, var(--cg-accent-soft) 0%, transparent 55%),
+    radial-gradient(900px 560px at 8% 108%, var(--cg-accent-soft) 0%, transparent 50%),
+    var(--cg-bg-layout);
+}
+
+/* 让卡片在暖色背景上有非常克制的描边而非重阴影 */
+.cg-soft-card {
+  border: 1px solid var(--cg-border) !important;
+}
+
+/* 顶部栏毛玻璃 */
+.cg-header-blur {
+  backdrop-filter: saturate(1.2) blur(8px);
+}
+
+/* 通用渐入 */
+.cg-fade-in {
+  animation: cgFade 0.4s ease both;
+}
+@keyframes cgFade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 让 antd 折线/面积图容器圆角不溢出 */
+.cg-chart {
+  width: 100%;
+}
