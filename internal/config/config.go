@@ -78,6 +78,9 @@ type AuthConfig struct {
 	JWTSecret     string `yaml:"jwt_secret"`
 	JWTTTLMinutes int    `yaml:"jwt_ttl_minutes"`
 	APIKeyTTLSec  int    `yaml:"apikey_cache_ttl_seconds"` // API Key → Group 缓存秒数，默认 60
+	// EncryptionKey 对称加密口令，用于可逆存储客户 API Key 明文与上游凭证，
+	// 支持管理后台"重复查看"客户 Key（见 internal/auth/crypto.go）。生产必须配置。
+	EncryptionKey string `yaml:"encryption_key"`
 }
 
 // LogConfig 日志配置。
@@ -149,6 +152,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("CG_JWT_SECRET"); v != "" {
 		cfg.Auth.JWTSecret = v
+	}
+	if v := os.Getenv("CG_ENCRYPTION_KEY"); v != "" {
+		cfg.Auth.EncryptionKey = v
 	}
 	if v := os.Getenv("CG_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = strings.ToLower(v)
