@@ -1,0 +1,26 @@
+# Go
+/bin/
+*.test
+*.out
+coverage.*
+/tmp/
+
+# 前端
+web/node_modules/
+web/dist/
+web/.vite/
+web/*.local
+
+# 截图中间产物（保留 docs/screenshots 下的成品）
+web/screenshots-tmp/
+
+# 环境与密钥
+.env
+*.pem
+*.key
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
