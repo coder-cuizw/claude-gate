@@ -59,9 +59,8 @@ export const palette = {
 export const channelColors: Record<string, string> = {
   kiro: '#C45A35',
   official: '#5B7C99',
-  bedrock: '#C9952B',
-  vertex: '#5B8C5A',
   relay: '#8A6FB0',
+  custom: '#5B8C5A',
 }
 
 const fontStack =

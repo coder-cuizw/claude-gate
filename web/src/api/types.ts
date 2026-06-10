@@ -1,8 +1,8 @@
 // 与后端 domain 对齐的前端类型定义（任务书 §4 / §5.7）。
 
-export type ChannelType = 'kiro' | 'official' | 'bedrock' | 'vertex' | 'relay'
+export type ChannelType = 'kiro' | 'official' | 'relay' | 'custom'
 
-export type KeyStatus = 'active' | 'cooldown' | 'disabled'
+export type KeyStatus = 'active' | 'disabled'
 
 export interface Channel {
   id: number
@@ -20,10 +20,8 @@ export interface UpstreamKey {
   channel_id: number
   name: string
   status: KeyStatus
-  cooldown_until?: string | null
   last_error?: string
   last_used_at?: string | null
-  refreshed_at?: string | null
   created_at: string
 }
 
@@ -96,6 +94,8 @@ export interface TraceListItem {
   ttft_ms: number
   duration_ms: number
   total_tokens: number
+  // 返回给客户的计费 usage（明细列表按 new-api 风格分列展示输入/输出/缓存创建/读取）
+  billed_usage: Usage
 }
 
 export interface TraceDetail extends TraceListItem {

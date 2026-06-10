@@ -44,14 +44,14 @@ const MODELS = [
   'claude-sonnet-4-20250514',
 ]
 
-// —— 通道 ——
+// —— 通道（claude-gate 只做中间层：上游 Key 直接配置，不做号池管理）——
 export const channels: Channel[] = [
   {
     id: 1,
     name: 'Kiro 主通道',
     type: 'kiro',
     base_url: 'https://prod.kiro.internal',
-    config: { sso_start_url: 'https://sso.kiro.internal/start', region: 'us-east-1', token_refresh_endpoint: '/oauth/token' },
+    config: { note: '当前透传；号池由外部维护，直接填好 key 即可' },
     enabled: true,
     key_count: 4,
     created_at: '2026-04-02T09:12:00Z',
@@ -67,26 +67,6 @@ export const channels: Channel[] = [
     created_at: '2026-04-02T09:20:00Z',
   },
   {
-    id: 3,
-    name: 'AWS Bedrock 美东',
-    type: 'bedrock',
-    base_url: '',
-    config: { region: 'us-east-1', anthropic_version: 'bedrock-2023-05-31' },
-    enabled: true,
-    key_count: 2,
-    created_at: '2026-04-10T11:00:00Z',
-  },
-  {
-    id: 4,
-    name: 'Google Vertex',
-    type: 'vertex',
-    base_url: '',
-    config: { project_id: 'claude-gate-prod', region: 'us-east5' },
-    enabled: false,
-    key_count: 1,
-    created_at: '2026-04-18T15:30:00Z',
-  },
-  {
     id: 5,
     name: '第三方中转 A',
     type: 'relay',
@@ -98,18 +78,15 @@ export const channels: Channel[] = [
   },
 ]
 
-// —— 上游 Key 池 ——
+// —— 上游 Key（直接配置，仅 启用/禁用 两态；不做冷却/刷新调度）——
 export const upstreamKeys: UpstreamKey[] = [
-  { id: 11, channel_id: 1, name: 'kiro-sso-01', status: 'active', last_used_at: '2026-06-10T20:29:40Z', refreshed_at: '2026-06-10T20:05:00Z', created_at: '2026-04-02T09:13:00Z' },
-  { id: 12, channel_id: 1, name: 'kiro-sso-02', status: 'active', last_used_at: '2026-06-10T20:29:10Z', refreshed_at: '2026-06-10T19:58:00Z', created_at: '2026-04-02T09:13:30Z' },
-  { id: 13, channel_id: 1, name: 'kiro-sso-03', status: 'cooldown', cooldown_until: '2026-06-10T20:33:00Z', last_error: '429 Too Many Requests', last_used_at: '2026-06-10T20:24:00Z', refreshed_at: '2026-06-10T19:40:00Z', created_at: '2026-04-02T09:14:00Z' },
-  { id: 14, channel_id: 1, name: 'kiro-sso-04', status: 'disabled', last_error: '令牌刷新失败：invalid_grant', refreshed_at: '2026-06-09T11:00:00Z', created_at: '2026-04-02T09:14:30Z' },
+  { id: 11, channel_id: 1, name: 'kiro-pool-01', status: 'active', last_used_at: '2026-06-10T20:29:40Z', created_at: '2026-04-02T09:13:00Z' },
+  { id: 12, channel_id: 1, name: 'kiro-pool-02', status: 'active', last_used_at: '2026-06-10T20:29:10Z', created_at: '2026-04-02T09:13:30Z' },
+  { id: 13, channel_id: 1, name: 'kiro-pool-03', status: 'active', last_used_at: '2026-06-10T20:24:00Z', created_at: '2026-04-02T09:14:00Z' },
+  { id: 14, channel_id: 1, name: 'kiro-pool-04', status: 'disabled', last_error: '账号已下线（手动停用）', last_used_at: '2026-06-09T11:00:00Z', created_at: '2026-04-02T09:14:30Z' },
   { id: 21, channel_id: 2, name: 'official-key-01', status: 'active', last_used_at: '2026-06-10T20:29:55Z', created_at: '2026-04-02T09:21:00Z' },
   { id: 22, channel_id: 2, name: 'official-key-02', status: 'active', last_used_at: '2026-06-10T20:28:00Z', created_at: '2026-04-02T09:21:30Z' },
-  { id: 23, channel_id: 2, name: 'official-key-03', status: 'cooldown', cooldown_until: '2026-06-10T20:31:00Z', last_error: '529 Overloaded', last_used_at: '2026-06-10T20:26:00Z', created_at: '2026-04-02T09:22:00Z' },
-  { id: 31, channel_id: 3, name: 'bedrock-role-east', status: 'active', last_used_at: '2026-06-10T20:27:00Z', created_at: '2026-04-10T11:01:00Z' },
-  { id: 32, channel_id: 3, name: 'bedrock-ak-backup', status: 'active', last_used_at: '2026-06-10T20:20:00Z', created_at: '2026-04-10T11:02:00Z' },
-  { id: 41, channel_id: 4, name: 'vertex-sa-json', status: 'disabled', last_error: '通道已停用', created_at: '2026-04-18T15:31:00Z' },
+  { id: 23, channel_id: 2, name: 'official-key-03', status: 'active', last_used_at: '2026-06-10T20:26:00Z', created_at: '2026-04-02T09:22:00Z' },
   { id: 51, channel_id: 5, name: 'relay-a-key-01', status: 'active', last_used_at: '2026-06-10T20:25:00Z', created_at: '2026-05-01T08:01:00Z' },
   { id: 52, channel_id: 5, name: 'relay-a-key-02', status: 'active', last_used_at: '2026-06-10T20:18:00Z', created_at: '2026-05-01T08:02:00Z' },
 ]
@@ -173,11 +150,11 @@ export const groups: Group[] = [
   },
   {
     id: 104,
-    name: 'Bedrock-公式计费',
+    name: '中转-公式计费',
     description: '用公式引擎自定义计量口径',
-    channel_id: 3,
-    channel_name: 'AWS Bedrock 美东',
-    channel_type: 'bedrock',
+    channel_id: 5,
+    channel_name: '第三方中转 A',
+    channel_type: 'relay',
     cache_strategy: {
       type: 'formula',
       params: {
@@ -222,10 +199,9 @@ export const apiKeys: ApiKey[] = [
 ]
 
 export const modelMappings: ModelMapping[] = [
-  { id: 1, channel_id: 3, client_model: 'claude-3-5-sonnet-20241022', upstream_model: 'anthropic.claude-3-5-sonnet-20241022-v2:0' },
-  { id: 2, channel_id: 3, client_model: 'claude-3-5-haiku-20241022', upstream_model: 'anthropic.claude-3-5-haiku-20241022-v1:0' },
-  { id: 3, channel_id: 4, client_model: 'claude-3-5-sonnet-20241022', upstream_model: 'claude-3-5-sonnet-v2@20241022' },
-  { id: 4, channel_id: 1, client_model: 'claude-sonnet-4-20250514', upstream_model: 'kiro-claude-sonnet-4' },
+  { id: 1, channel_id: 1, client_model: 'claude-sonnet-4-20250514', upstream_model: 'kiro-claude-sonnet-4' },
+  { id: 2, channel_id: 1, client_model: 'claude-3-5-haiku-20241022', upstream_model: 'kiro-claude-haiku-3-5' },
+  { id: 3, channel_id: 5, client_model: 'claude-3-5-sonnet-20241022', upstream_model: 'claude-3-5-sonnet-latest' },
 ]
 
 // —— 请求明细（生成 ~220 条） ——
@@ -361,9 +337,7 @@ export const api = {
     return [
       { channel_type: 'kiro', request_count: 612000, success_rate: 0.961, avg_ttft_ms: 720 },
       { channel_type: 'official', request_count: 438000, success_rate: 0.989, avg_ttft_ms: 540 },
-      { channel_type: 'bedrock', request_count: 156000, success_rate: 0.976, avg_ttft_ms: 610 },
-      { channel_type: 'relay', request_count: 72000, success_rate: 0.948, avg_ttft_ms: 880 },
-      { channel_type: 'vertex', request_count: 6930, success_rate: 0.97, avg_ttft_ms: 650 },
+      { channel_type: 'relay', request_count: 234930, success_rate: 0.948, avg_ttft_ms: 880 },
     ]
   },
   async channels(): Promise<Channel[]> {

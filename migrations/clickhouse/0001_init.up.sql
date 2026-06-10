@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
     api_key_id UInt64,
     group_id UInt64,
     channel_id UInt64,
-    channel_type LowCardinality(String),   -- kiro / official / bedrock / vertex / relay
+    channel_type LowCardinality(String),   -- kiro / official / relay / custom
     upstream_key_id UInt64,
     model String,
 
