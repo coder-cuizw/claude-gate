@@ -2,6 +2,17 @@
 
 本项目遵循约定式提交（Conventional Commits）。
 
+## [未发布]
+
+### 新增
+
+- **客户 API Key 支持重复查看**：明文经 AES-256-GCM 可逆加密存储（`api_keys.key_encrypted`），
+  管理后台可随时「查看密钥」并复制，热路径仍用 `key_hash` 校验不受影响。
+  - 后端：`internal/auth/crypto.go`（AES-256-GCM 加解密 + 单测）、新增迁移 `0002_apikey_encrypted`、
+    配置项 `CG_ENCRYPTION_KEY`
+  - 前端：客户 Key 列表新增「查看密钥」操作，弹窗支持打码/显示切换与复制
+  - 文档：`docs/configuration.md` 补充重复查看的安全取舍说明
+
 ## [0.1.0] - 2026-06-10
 
 首个里程碑：骨架 + 核心逻辑 + 完整前端控制台。

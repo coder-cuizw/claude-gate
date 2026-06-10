@@ -99,16 +99,22 @@ type Group struct {
 	UpdatedAt         time.Time           `json:"updated_at"`
 }
 
-// APIKey 客户 API Key。明文仅在创建时返回一次，库中只存前缀与 hash。
+// APIKey 客户 API Key。
+//
+// 存两份密文：
+//   - KeyHash：不可逆 hash，用于热路径校验（见 auth.VerifySecret）；
+//   - KeyEncrypted：AES-256-GCM 可逆密文，仅供管理后台"重复查看"明文时解密
+//     （中转站运营常需事后重看/分发 Key，是面向该产品的有意取舍，见 internal/auth/crypto.go）。
 type APIKey struct {
-	ID        int64      `json:"id"`
-	KeyPrefix string     `json:"key_prefix"`
-	KeyHash   string     `json:"-"`
-	Name      string     `json:"name"`
-	GroupID   int64      `json:"group_id"`
-	Enabled   bool       `json:"enabled"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
+	ID           int64      `json:"id"`
+	KeyPrefix    string     `json:"key_prefix"`
+	KeyHash      string     `json:"-"`
+	KeyEncrypted string     `json:"-"`
+	Name         string     `json:"name"`
+	GroupID      int64      `json:"group_id"`
+	Enabled      bool       `json:"enabled"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 // ModelMapping 模型别名映射。

@@ -326,6 +326,17 @@ export function buildTimeseries(w: TimeWindow, metric: string): TimeseriesPoint[
   return out
 }
 
+// 演示用：从前缀确定性派生完整 Key 明文（真实环境为后台 AES 解密后的明文）。
+function fullKeyFor(prefix: string): string {
+  let h = 2166136261
+  const out: string[] = []
+  for (let i = 0; i < 48; i++) {
+    h = (Math.imul(h ^ (prefix.charCodeAt(i % prefix.length) + i * 7), 16777619)) >>> 0
+    out.push('0123456789abcdef'[h & 15])
+  }
+  return `cg-${prefix}-${out.join('')}`
+}
+
 export const api = {
   async overview(): Promise<StatsOverview> {
     await delay()
@@ -374,6 +385,14 @@ export const api = {
   async apiKeys(): Promise<ApiKey[]> {
     await delay()
     return apiKeys
+  },
+  // 重复查看客户 Key 明文（真实环境对应 GET /api/admin/api-keys/:id/reveal，
+  // 后台用 CG_ENCRYPTION_KEY 解密 key_encrypted，建议配合操作审计）。
+  async revealApiKey(id: number): Promise<string> {
+    await delay(200)
+    const k = apiKeys.find((x) => x.id === id)
+    if (!k) throw new Error('Key 不存在')
+    return fullKeyFor(k.key_prefix)
   },
   async modelMappings(): Promise<ModelMapping[]> {
     await delay(160)
