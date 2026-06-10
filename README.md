@@ -67,8 +67,8 @@ PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node scripts/screenshots.mjs
 ```bash
 make build        # 编译 bin/gateway 与 bin/migrate
 make test         # 运行全部单元测试
-make run          # 启动网关，默认 :8080
-curl localhost:8080/healthz
+make run          # 启动网关，默认 :8791
+curl localhost:8791/healthz
 ```
 
 ### 全套依赖（docker-compose）

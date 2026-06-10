@@ -19,7 +19,6 @@ type KeyStatus string
 const (
 	KeyActive   KeyStatus = "active"
 	KeyDisabled KeyStatus = "disabled"
-	KeyCooldown KeyStatus = "cooldown"
 )
 
 // User 管理后台用户。
@@ -45,16 +44,18 @@ type UpstreamChannel struct {
 }
 
 // UpstreamKey 上游凭证。CredentialEncrypted 为 AES 加密存储，内容随通道而异。
+//
+// 定位：claude-gate 只做中间层，不做号池管理。上游 Key 由使用方在外部开好后
+// 直接填入；网关仅在同通道多把 Key 间做简单轮询转发，不维护刷新令牌、不做
+// 冷却/健康调度等账号池生命周期管理。
 type UpstreamKey struct {
 	ID                  int64      `json:"id"`
 	ChannelID           int64      `json:"channel_id"`
 	Name                string     `json:"name"`
 	CredentialEncrypted string     `json:"-"`
-	Status              KeyStatus  `json:"status"`
-	CooldownUntil       *time.Time `json:"cooldown_until,omitempty"`
+	Status              KeyStatus  `json:"status"` // active / disabled
 	LastError           string     `json:"last_error,omitempty"`
 	LastUsedAt          *time.Time `json:"last_used_at,omitempty"`
-	RefreshedAt         *time.Time `json:"refreshed_at,omitempty"` // 刷新型凭证（Kiro）的最近刷新时间
 	CreatedAt           time.Time  `json:"created_at"`
 }
 

@@ -93,7 +93,7 @@ type LogConfig struct {
 func Default() Config {
 	return Config{
 		Server: ServerConfig{
-			Addr:            ":8080",
+			Addr:            ":8791",
 			RequestTimeout:  600,
 			ShutdownTimeout: 30,
 		},
