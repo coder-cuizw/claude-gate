@@ -11,10 +11,13 @@ import (
 // fakeT 是用于测试的可控改写器。
 type fakeT struct {
 	Base
-	name      string
-	reqErr    error
-	mutateReq func(*domain.MessagesRequest)
-	dropEvent bool
+	name       string
+	reqErr     error
+	respErr    error
+	streamErr  error
+	mutateReq  func(*domain.MessagesRequest)
+	mutateResp func(*domain.MessagesResponse)
+	dropEvent  bool
 }
 
 func (f *fakeT) Name() string { return f.name }
@@ -31,7 +34,22 @@ func (f *fakeT) TransformRequest(_ context.Context, req *domain.MessagesRequest)
 	return req, nil
 }
 
+func (f *fakeT) TransformResponse(_ context.Context, resp *domain.MessagesResponse) (*domain.MessagesResponse, error) {
+	if f.respErr != nil {
+		return nil, f.respErr
+	}
+	if f.mutateResp != nil {
+		clone := *resp
+		f.mutateResp(&clone)
+		return &clone, nil
+	}
+	return resp, nil
+}
+
 func (f *fakeT) TransformStreamEvent(_ context.Context, ev *domain.StreamEvent) (*domain.StreamEvent, error) {
+	if f.streamErr != nil {
+		return nil, f.streamErr
+	}
 	if f.dropEvent {
 		return nil, nil
 	}
@@ -89,17 +107,46 @@ func TestPipelineStreamEventDrop(t *testing.T) {
 }
 
 func TestPipelineResponsePath(t *testing.T) {
-	// 响应路径：默认 Base 实现原样透传，验证不报错且保留内容
+	// 响应路径：链式改写 model 字段
 	p := NewPipeline().
-		Use(&fakeT{name: "a"}, FailFast).
-		Use(&fakeT{name: "b"}, FailSkip)
-	resp := &domain.MessagesResponse{ID: "msg_1", Model: "claude"}
-	out, err := p.ApplyResponse(context.Background(), resp)
+		Use(&fakeT{name: "a", mutateResp: func(r *domain.MessagesResponse) { r.Model += "-a" }}, FailFast).
+		Use(&fakeT{name: "b", mutateResp: func(r *domain.MessagesResponse) { r.Model += "-b" }}, FailSkip)
+	out, err := p.ApplyResponse(context.Background(), &domain.MessagesResponse{ID: "msg_1", Model: "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.ID != "msg_1" {
-		t.Fatalf("响应被破坏: %+v", out)
+	if out.Model != "claude-a-b" {
+		t.Fatalf("响应链式改写错误: %+v", out)
+	}
+}
+
+func TestPipelineResponseFailFastAndSkip(t *testing.T) {
+	// fail-fast：响应改写出错应中断
+	pFast := NewPipeline().Use(&fakeT{name: "boom", respErr: errors.New("x")}, FailFast)
+	if _, err := pFast.ApplyResponse(context.Background(), &domain.MessagesResponse{Model: "m"}); err == nil {
+		t.Fatal("响应 fail-fast 应返回错误")
+	}
+	// skip：响应改写出错应跳过并继续
+	pSkip := NewPipeline().
+		Use(&fakeT{name: "boom", respErr: errors.New("x")}, FailSkip).
+		Use(&fakeT{name: "b", mutateResp: func(r *domain.MessagesResponse) { r.Model += "-b" }}, FailFast)
+	out, err := pSkip.ApplyResponse(context.Background(), &domain.MessagesResponse{Model: "m"})
+	if err != nil || out.Model != "m-b" {
+		t.Fatalf("响应 skip 处理错误: out=%+v err=%v", out, err)
+	}
+}
+
+func TestPipelineStreamFailFastAndSkip(t *testing.T) {
+	// fail-fast：流事件改写出错应中断
+	pFast := NewPipeline().Use(&fakeT{name: "boom", streamErr: errors.New("x")}, FailFast)
+	if _, err := pFast.ApplyStreamEvent(context.Background(), &domain.StreamEvent{Event: "ping"}); err == nil {
+		t.Fatal("流事件 fail-fast 应返回错误")
+	}
+	// skip：流事件改写出错应跳过，保留原事件
+	pSkip := NewPipeline().Use(&fakeT{name: "boom", streamErr: errors.New("x")}, FailSkip)
+	out, err := pSkip.ApplyStreamEvent(context.Background(), &domain.StreamEvent{Event: "ping"})
+	if err != nil || out == nil || out.Event != "ping" {
+		t.Fatalf("流事件 skip 处理错误: out=%+v err=%v", out, err)
 	}
 }
 
