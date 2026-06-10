@@ -6,12 +6,11 @@ import "time"
 type ChannelType string
 
 const (
-	ChannelKiro     ChannelType = "kiro"     // 逆向私有通道，需重度特殊处理
+	ChannelKiro     ChannelType = "kiro"     // 逆向私有通道，当前先做透传
 	ChannelOfficial ChannelType = "official" // Claude 官方 API
-	ChannelBedrock  ChannelType = "bedrock"  // AWS Bedrock
-	ChannelVertex   ChannelType = "vertex"   // Google Vertex AI
 	ChannelRelay    ChannelType = "relay"    // Anthropic 兼容第三方中转
-	ChannelCustom   ChannelType = "custom"   // 自定义
+	ChannelCustom   ChannelType = "custom"   // 自定义 / 本地 mock 合成通道
+	// 注：Bedrock / Vertex 已按需移除；后续接入只需新增 Adapter 并在 registry 注册。
 )
 
 // KeyStatus 表示上游 Key 的可用状态。
