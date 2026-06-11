@@ -113,27 +113,36 @@ claude-gate/
 | OfficialAdapter / KiroAdapter（透传）/ RelayAdapter | ✅ 完成 | 复用通用 httpproxy；Kiro 当前透传 |
 | 本地 mock 通道 | ✅ 完成 | 离线合成响应，端到端自测/演示用 |
 | 管理 API（§6 / §5.7） | ✅ 完成 | JWT + 全资源 CRUD + 统计 + 明细/详情 + 复现 + Key reveal |
-| 存储层（接口 + 内存实现） | ✅ 完成 | `ConfigStore`/`Cache`/`Sink`/`BodyStore`/`MetricsReader` + 内存实现，零依赖可自测 |
+| 存储真实驱动（PG/Redis/CH/S3） | ✅ 完成 | pgx / go-redis / clickhouse-go / minio-go 落地，**各驱动真实服务集成测试通过** |
+| 真实模式装配 + 切换（§8） | ✅ 完成 | `CG_STORE=real` 连真库；readyz 真探活；首次启动自动建管理员并播种 |
+| 并发治理 / 限流 / 重试（§2.1 / §5.2） | ✅ 完成 | 全局+通道并发上限 429 背压、rpm/tpm 限流、上游重试，**均有单测** |
+| 异步落库 worker pool（§2.1 / §5.6） | ✅ 完成 | body+明细投递队列、队列满降级、S3 重试、优雅关闭 flush |
+| 计费 token 精确口径（§5.3） | ✅ 完成 | total 优先用上游真实输入侧 token，字节估算仅回退 |
+| 数据库迁移工具（§8） | ✅ 完成 | `cmd/migrate` 执行 PG/CH 迁移，版本记录幂等 |
 | 前端控制台（§7，9 个页面） | ✅ 完成 | Claude 风格 + 明暗自适应 + mock 数据可独立运行 |
-| 数据库迁移（§4） | ✅ 完成 | PG + ClickHouse 建表脚本 |
-| 存储真实驱动（PG/CH/Redis/S3） | 🚧 待接 | 同接口可接真实驱动；内存实现已覆盖全部功能与自测 |
+| 前端对接真实后端 | 🚧 待接 | 当前前端走内置 mock；后端 API 已就绪，替换 `web/src/api/queries.ts` 数据源即可 |
 | **KiroAdapter 私有协议** | 🚧 透传中 | 当前先透传；按真实报错再适配（任务书 §10 不臆测 wire format） |
 
-> 说明：后端默认以**内存模式**装配（`app.BuildMemory`），零外部依赖即可 `make run` 端到端跑通并自测；接入真实 PG/CH/Redis/S3 时实现同一组接口后在 app 内切换即可，主链路与管理 API 无需改动。
+> 说明：`CG_STORE=real` 时连真实 PG/Redis/ClickHouse/S3（`docker compose up` 一键起全套并自动迁移）；
+> 默认 `memory` 模式零依赖即可 `make run` 端到端自测。两模式实现同一组接口，主链路与管理 API 无差异。
 >
 > **Bedrock / Vertex 已按需移除**；**号池管理、令牌刷新、冷却调度**按"只做中间层"定位移除。
 
 ## 测试 / 自测
 
 ```bash
-go test ./... -cover     # 全部单元 + 端到端测试
-make run                 # 内存模式启动（默认 :8791），随后可 curl 自测
+go test ./... -cover                       # 单元 + 端到端 + 治理测试
+# 真实存储集成测试（需 PG/Redis/CH/MinIO；本地起好后设环境变量）
+CG_TEST_PG_DSN=... CG_TEST_REDIS_ADDR=... CG_TEST_CH_ADDR=... CG_TEST_S3_ENDPOINT=... go test ./internal/store/...
+make run                                    # 内存模式启动（默认 :8791）
+docker compose -f deploy/docker-compose.yml up   # 真实模式一键起全套
 ```
 
-- 核心逻辑（cache / transformer / auth / keypool）均有单测，缓存引擎覆盖率 **96.7%**
-- `internal/app` 端到端测试：登录 / 鉴权 / 流式+非流代理 / reveal / 统计
-- 流式 goroutine 取消测试（§11.5），无泄漏
-- curl 实测：登录→CRUD→流式+非流 `/v1/messages`→统计→明细详情→跨分组复现→Key reveal 全通
+- 核心逻辑（cache / transformer / auth / keypool）单测，缓存引擎覆盖率 **96.7%**
+- **存储集成测试**：PG（JSONB 往返/前缀查找/可逆密文）、Redis（TTL）、ClickHouse（批写+统计）、S3（body 往返）均连真实服务通过
+- **治理单测**：并发背压 429 / rpm 限流 / 重试成功 / 计费基于上游 token
+- `internal/app` 端到端测试 + 流式 goroutine 取消测试（§11.5，无泄漏）
+- **real 模式真测**：配置落 PG、明细落 CH、body 落 S3、热路径走 Redis；20 并发异步落库不崩；重启数据保留、seed 幂等；优雅关闭 flush
 
 ## 文档
 

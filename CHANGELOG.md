@@ -6,6 +6,16 @@
 
 ### 新增
 
+- **真实存储落地（数据不再丢）**：PostgreSQL（pgx）/ Redis（go-redis）/ ClickHouse（clickhouse-go）/
+  S3·MinIO（minio-go）四套真实驱动，各自连真实服务的集成测试通过；`CG_STORE=real` 切换，
+  readyz 真探活，首次启动自动建管理员并播种。
+- **生产级代理治理（§2.1）**：全局+每通道并发上限与 429 背压、分组 rpm/tpm 限流（Redis/内存双实现）、
+  上游重试、异步落库 worker pool（队列满降级 + S3 重试 + 优雅 flush）。
+- **计费精确化（§5.3）**：计费 total 改用上游真实输入侧 token，字节估算仅作回退。
+- **迁移执行工具 `cmd/migrate`**：按序应用 PG/CH 迁移，`schema_migrations` 记录版本，幂等。
+- **docker-compose 升级**：新增 migrate 服务（建表后退出），gateway 切真实模式，一键起全套并自动迁移。
+- 修复：明细详情把 S3 取回的非法 JSON body 安全降级为字符串（真测错误请求暴露）。
+
 - **端到端代理主链路打通**（§3 / §5.1）：认证→分组→改写→选 Adapter+取 Key→调上游→
   缓存计费改写 usage→流式/非流回写→明细与 body 落库，curl 实测流式与非流均通过。
 - **存储层落地**：`store.ConfigStore` 全量 CRUD、`store.Cache`、`observ.Sink/BodyStore/MetricsReader`
