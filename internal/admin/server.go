@@ -30,6 +30,10 @@ type Invalidator interface {
 	Invalidate(ctx context.Context, prefix string)
 }
 
+// KeyReloader 在上游 Key 变更后重新加载该通道的 Key 选择池，
+// 使运行时通过管理 API 新增/启停的 Key 立即生效。
+type KeyReloader func(ctx context.Context, channelID int64)
+
 // Deps 是管理 API 的依赖集合。
 type Deps struct {
 	Store       store.ConfigStore
@@ -37,6 +41,7 @@ type Deps struct {
 	Bodies      observ.BodyStore
 	Replayer    Replayer
 	Invalidator Invalidator
+	KeyReloader KeyReloader
 	JWTSecret   string
 	JWTTTL      time.Duration
 	EncKey      string
@@ -232,6 +237,7 @@ func (s *Server) createUpstreamKey(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, err.Error())
 		return
 	}
+	s.reloadKeys(r.Context(), k.ChannelID)
 	ok(w, k)
 }
 
@@ -262,15 +268,29 @@ func (s *Server) updateUpstreamKey(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, err.Error())
 		return
 	}
+	s.reloadKeys(r.Context(), k.ChannelID)
 	ok(w, k)
 }
 
 func (s *Server) deleteUpstreamKey(w http.ResponseWriter, r *http.Request) {
+	var channelID int64
+	if k, err := upstreamKeyByID(r.Context(), s.d.Store, pathID(r)); err == nil {
+		channelID = k.ChannelID
+	}
 	if err := s.d.Store.DeleteUpstreamKey(r.Context(), pathID(r)); err != nil {
 		fail(w, 500, err.Error())
 		return
 	}
+	if channelID != 0 {
+		s.reloadKeys(r.Context(), channelID)
+	}
 	ok(w, map[string]any{"deleted": true})
+}
+
+func (s *Server) reloadKeys(ctx context.Context, channelID int64) {
+	if s.d.KeyReloader != nil {
+		s.d.KeyReloader(ctx, channelID)
+	}
 }
 
 // ---- 分组 ----
@@ -531,12 +551,12 @@ func (s *Server) getTrace(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		if rec.RequestBodyS3Key != "" {
 			if b, err := s.d.Bodies.Get(ctx, rec.RequestBodyS3Key); err == nil {
-				resp["request_body"] = json.RawMessage(b)
+				resp["request_body"] = rawOrString(b)
 			}
 		}
 		if rec.ResponseBodyS3Key != "" {
 			if b, err := s.d.Bodies.Get(ctx, rec.ResponseBodyS3Key); err == nil {
-				resp["response_body"] = json.RawMessage(b)
+				resp["response_body"] = rawOrString(b)
 			}
 		}
 	}
@@ -675,4 +695,13 @@ func orDefault(v, def string) string {
 		return def
 	}
 	return v
+}
+
+// rawOrString 把从 S3 取回的 body 安全嵌入响应：合法 JSON 原样内联，
+// 否则当字符串（错误请求的原始 body 可能并非合法 JSON）。
+func rawOrString(b []byte) any {
+	if json.Valid(b) {
+		return json.RawMessage(b)
+	}
+	return string(b)
 }

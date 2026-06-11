@@ -4,17 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/claude-gate/claude-gate/internal/auth"
 	"github.com/claude-gate/claude-gate/internal/cache"
 	"github.com/claude-gate/claude-gate/internal/domain"
 	"github.com/claude-gate/claude-gate/internal/observ"
+	"github.com/claude-gate/claude-gate/internal/ratelimit"
 	"github.com/claude-gate/claude-gate/internal/store"
 	"github.com/claude-gate/claude-gate/internal/transformer"
 	"github.com/claude-gate/claude-gate/internal/transformer/factory"
@@ -40,6 +44,14 @@ type ProxyDeps struct {
 	Logger        *slog.Logger
 	SampleSuccess float64       // 成功请求 body 落盘采样率
 	Timeout       time.Duration // 全链路超时
+	EncKey        string        // 上游凭证解密口令（AES-256-GCM）
+
+	// 并发治理与限流（任务书 §2.1 / §5.2）
+	GlobalMaxInFlight  int               // 全局并发上限，超出快速 429（背压，不落库）
+	PerChannelInFlight int               // 每通道并发上限
+	Limiter            ratelimit.Limiter // 分组 rpm/tpm 限流；nil 表示不限流
+	WorkerPoolSize     int               // 异步落库 worker 数（body+明细），默认 16
+	S3WriteRetry       int               // body 落盘失败重试次数
 }
 
 // Proxy 是端到端代理引擎，实现完整主链路（任务书 §3 / §5.1）：
@@ -47,12 +59,24 @@ type ProxyDeps struct {
 //	认证 → 加载分组 → 改写 → 选 Adapter + 取 Key → 调上游 →
 //	缓存计费改写 usage → 流式/非流式回写 → 明细与 body 落库
 type Proxy struct {
-	d ProxyDeps
+	d           ProxyDeps
+	globalSem   chan struct{}  // 全局并发信号量
+	chanSems    sync.Map       // channelID -> chan struct{}，每通道并发信号量
+	finishQueue chan finishJob // 异步落库队列
+	finishWG    sync.WaitGroup
+	dropped     atomic.Int64
+}
+
+// finishJob 是一次请求收尾（body 落盘 + 明细落库）的异步任务。
+type finishJob struct {
+	rec      *observ.RequestRecord
+	reqBody  []byte
+	respBody []byte
 }
 
 var _ ProxyHandler = (*Proxy)(nil)
 
-// NewProxy 构造代理引擎。
+// NewProxy 构造代理引擎并启动异步落库 worker pool。
 func NewProxy(d ProxyDeps) *Proxy {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
@@ -60,19 +84,90 @@ func NewProxy(d ProxyDeps) *Proxy {
 	if d.Timeout <= 0 {
 		d.Timeout = 600 * time.Second
 	}
-	return &Proxy{d: d}
+	p := &Proxy{d: d}
+	if d.GlobalMaxInFlight > 0 {
+		p.globalSem = make(chan struct{}, d.GlobalMaxInFlight)
+	}
+	n := d.WorkerPoolSize
+	if n <= 0 {
+		n = 16
+	}
+	p.finishQueue = make(chan finishJob, n*64)
+	for i := 0; i < n; i++ {
+		p.finishWG.Add(1)
+		go p.finishWorker()
+	}
+	return p
+}
+
+func (p *Proxy) finishWorker() {
+	defer p.finishWG.Done()
+	for job := range p.finishQueue {
+		p.doFinish(job.rec, job.reqBody, job.respBody)
+	}
+}
+
+// Close 停止 worker pool 并等待落库队列排空（flush）。
+func (p *Proxy) Close(ctx context.Context) error {
+	close(p.finishQueue)
+	done := make(chan struct{})
+	go func() { p.finishWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+	if d := p.dropped.Load(); d > 0 {
+		p.d.Logger.Warn("落库队列降级丢弃计数", "dropped", d)
+	}
+	return nil
+}
+
+// acquireChannel 取每通道并发槽位；ok=false 表示已达上限。
+func (p *Proxy) acquireChannel(channelID int64) (release func(), ok bool) {
+	if p.d.PerChannelInFlight <= 0 {
+		return func() {}, true
+	}
+	v, _ := p.chanSems.LoadOrStore(channelID, make(chan struct{}, p.d.PerChannelInFlight))
+	sem := v.(chan struct{})
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, true
+	default:
+		return func() {}, false
+	}
 }
 
 // ServeMessages 处理 POST /v1/messages（流式与非流式合一）。
 func (p *Proxy) ServeMessages(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	traceID := observ.TraceID(r.Context())
+
+	// 0. 全局并发背压：超上限立即 429，不进入主链路、不落库，避免雪崩放大压力（§2.1）
+	if p.globalSem != nil {
+		select {
+		case p.globalSem <- struct{}{}:
+			defer func() { <-p.globalSem }()
+		default:
+			writeError(w, traceID, domain.ErrTooManyInFlight)
+			return
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), p.d.Timeout)
 	defer cancel()
 
 	rec := &observ.RequestRecord{TraceID: traceID, RequestAt: start}
 	var reqBody, respBody []byte
-	defer func() { p.finish(ctx, rec, reqBody, respBody) }()
+	var tpmKey string
+	defer func() { p.submitFinish(rec, reqBody, respBody) }()
+	// tpm 事后记账：按上游真实 token 累加到当前分钟窗口
+	defer func() {
+		if tpmKey != "" && p.d.Limiter != nil {
+			if n := rec.Upstream.Total(); n > 0 {
+				_, _ = p.d.Limiter.Incr(context.WithoutCancel(ctx), tpmKey, n, 65*time.Second)
+			}
+		}
+	}()
 
 	fail := func(err error) {
 		de, _ := domain.AsError(err)
@@ -101,6 +196,32 @@ func (p *Proxy) ServeMessages(w http.ResponseWriter, r *http.Request) {
 	rec.GroupID = resolved.Group.ID
 	rec.ChannelID = resolved.Channel.ID
 	rec.ChannelType = resolved.Channel.Type
+
+	// 1.1 每通道并发上限
+	releaseChan, ok := p.acquireChannel(resolved.Channel.ID)
+	if !ok {
+		fail(domain.ErrTooManyInFlight.WithMessage("通道并发已满，请稍后重试"))
+		return
+	}
+	defer releaseChan()
+
+	// 1.2 分组 rpm 限流（固定窗口）
+	if rpm := resolved.Group.RateLimit.RPM; rpm > 0 && p.d.Limiter != nil {
+		key := fmt.Sprintf("cg:rl:rpm:%d:%d", resolved.Group.ID, time.Now().Unix()/60)
+		if cur, err := p.d.Limiter.Incr(ctx, key, 1, 65*time.Second); err == nil && cur > rpm {
+			fail(domain.ErrRateLimited.WithMessage("请求频率超过分组 rpm 限制"))
+			return
+		}
+		// tpm 事前检查：当前分钟已消耗 token 超阈值则拒（事后在 finish 中累加）
+		if tpm := resolved.Group.RateLimit.TPM; tpm > 0 {
+			tkey := fmt.Sprintf("cg:rl:tpm:%d:%d", resolved.Group.ID, time.Now().Unix()/60)
+			if used, err := p.d.Limiter.Incr(ctx, tkey, 0, 65*time.Second); err == nil && used >= tpm {
+				fail(domain.ErrRateLimited.WithMessage("已超过分组 tpm 限制"))
+				return
+			}
+			tpmKey = tkey // 供 defer 事后累加
+		}
+	}
 
 	// 2. 读取并留存原始 body
 	reqBody, err = io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
@@ -138,6 +259,7 @@ func (p *Proxy) ServeMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	if key != nil {
 		rec.UpstreamKeyID = key.ID
+		key = p.decryptKey(key)
 	}
 
 	cctx := cache.Context{Model: req.Model, TotalContextTokens: estimateTokens(&req)}
@@ -170,7 +292,7 @@ func (p *Proxy) ServeMessages(w http.ResponseWriter, r *http.Request) {
 
 // serveUnary 处理非流式：调用上游 → 计费改写 → 响应改写 → 回写 JSON。
 func (p *Proxy) serveUnary(ctx context.Context, w http.ResponseWriter, ad upstream.Adapter, req *domain.MessagesRequest, key *domain.UpstreamKey, rg *auth.ResolvedGroup, cctx cache.Context, pipe *transformer.Pipeline, rec *observ.RequestRecord) ([]byte, error) {
-	resp, err := ad.Send(ctx, req, key)
+	resp, err := p.callUnary(ctx, ad, req, key, rg.Group.Retry)
 	if err != nil {
 		return nil, err
 	}
@@ -179,6 +301,8 @@ func (p *Proxy) serveUnary(ctx context.Context, w http.ResponseWriter, ad upstre
 	rec.TTFTMs = uint32(time.Since(rec.RequestAt).Milliseconds())
 
 	upUsage := resp.Usage.ToUsage()
+	// 计费 total 优先用上游真实输入侧 token（精确计费），上游未返回时回退字节估算
+	cctx.TotalContextTokens = contextTokens(upUsage, req)
 	billed := rg.CacheStrategy.Compute(upUsage, cctx)
 	resp.Usage = toRawUsage(billed)
 	rec.Upstream, rec.Billed = upUsage, billed
@@ -196,7 +320,7 @@ func (p *Proxy) serveUnary(ctx context.Context, w http.ResponseWriter, ad upstre
 
 // serveStream 处理流式：解析上游 SSE → 累积 usage → 在 message_delta 改写为计费值 → 即时 flush。
 func (p *Proxy) serveStream(ctx context.Context, w http.ResponseWriter, ad upstream.Adapter, req *domain.MessagesRequest, key *domain.UpstreamKey, rg *auth.ResolvedGroup, cctx cache.Context, pipe *transformer.Pipeline, rec *observ.RequestRecord) ([]byte, error) {
-	events, err := ad.SendStream(ctx, req, key)
+	events, err := p.callStream(ctx, ad, req, key, rg.Group.Retry)
 	if err != nil {
 		return nil, err
 	}
@@ -228,8 +352,9 @@ func (p *Proxy) serveStream(ctx context.Context, w http.ResponseWriter, ad upstr
 			firstToken = true
 		}
 
-		// message_delta 携带最终 usage：改写为计费值后再下发
+		// message_delta 携带最终 usage：按上游真实输入侧 token 计费并改写后下发
 		if ev.Event == "message_delta" {
+			cctx.TotalContextTokens = contextTokens(upUsage, req)
 			billed := rg.CacheStrategy.Compute(upUsage, cctx)
 			rec.Upstream, rec.Billed = upUsage, billed
 			ev.Data = rewriteEventUsage(ev.Data, billed)
@@ -245,11 +370,102 @@ func (p *Proxy) serveStream(ctx context.Context, w http.ResponseWriter, ad upstr
 		}
 	}
 	if rec.Billed == (domain.Usage{}) && upUsage != (domain.Usage{}) {
+		cctx.TotalContextTokens = contextTokens(upUsage, req)
 		rec.Upstream = upUsage
 		rec.Billed = rg.CacheStrategy.Compute(upUsage, cctx)
 	}
 	rec.IsSuccess = true
 	return buf.Bytes(), nil
+}
+
+// callUnary 调用上游非流式接口，对可重试错误按分组 retry 配置重试。
+func (p *Proxy) callUnary(ctx context.Context, ad upstream.Adapter, req *domain.MessagesRequest, key *domain.UpstreamKey, retry domain.RetryConfig) (*domain.MessagesResponse, error) {
+	var lastErr error
+	for i := 0; i <= maxRetries(retry); i++ {
+		if i > 0 && !backoff(ctx, retry.BackoffMs) {
+			return nil, domain.ErrTimeout
+		}
+		resp, err := ad.Send(ctx, req, key)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if !retriable(err) {
+			break
+		}
+	}
+	return nil, lastErr
+}
+
+// callStream 建立上游流式连接，对建连阶段的可重试错误重试（尚未写出 header）。
+func (p *Proxy) callStream(ctx context.Context, ad upstream.Adapter, req *domain.MessagesRequest, key *domain.UpstreamKey, retry domain.RetryConfig) (<-chan domain.StreamEvent, error) {
+	var lastErr error
+	for i := 0; i <= maxRetries(retry); i++ {
+		if i > 0 && !backoff(ctx, retry.BackoffMs) {
+			return nil, domain.ErrTimeout
+		}
+		ch, err := ad.SendStream(ctx, req, key)
+		if err == nil {
+			return ch, nil
+		}
+		lastErr = err
+		if !retriable(err) {
+			break
+		}
+	}
+	return nil, lastErr
+}
+
+func maxRetries(r domain.RetryConfig) int {
+	if r.MaxRetries < 0 {
+		return 0
+	}
+	return r.MaxRetries
+}
+
+// backoff 等待 ms 毫秒，ctx 取消则返回 false。
+func backoff(ctx context.Context, ms int) bool {
+	if ms <= 0 {
+		return true
+	}
+	select {
+	case <-time.After(time.Duration(ms) * time.Millisecond):
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// retriable 仅对上游失败/超时类错误重试（认证、请求格式等不重试）。
+func retriable(err error) bool {
+	de, ok := domain.AsError(err)
+	if !ok {
+		return false
+	}
+	return de.Code == domain.ErrUpstreamFailure.Code || de.Code == domain.ErrTimeout.Code
+}
+
+// decryptKey 返回填充了明文凭证的 Key 副本（不修改池中共享的原对象）。
+// 解密失败时（如未加密的种子数据）回退使用原值。
+func (p *Proxy) decryptKey(k *domain.UpstreamKey) *domain.UpstreamKey {
+	if k == nil {
+		return nil
+	}
+	cp := *k
+	if p.d.EncKey != "" && k.CredentialEncrypted != "" {
+		if plain, err := auth.Decrypt(k.CredentialEncrypted, p.d.EncKey); err == nil {
+			cp.Credential = plain
+		}
+	}
+	return &cp
+}
+
+// contextTokens 计算计费 total：优先上游真实输入侧 token，回退字节估算。
+func contextTokens(up domain.Usage, req *domain.MessagesRequest) int {
+	if t := up.InputTokens + up.CacheReadTokens + up.CacheCreationTokens; t > 0 {
+		return t
+	}
+	return estimateTokens(req)
 }
 
 // ReplayResult 是一次请求复现的结果（任务书 §5.6）。
@@ -309,6 +525,7 @@ func (p *Proxy) Replay(ctx context.Context, groupID int64, body []byte, override
 	if err != nil {
 		return nil, err
 	}
+	key = p.decryptKey(key)
 	req.Stream = false
 	resp, err := adapter.Send(ctx, &req, key)
 	if err != nil {
@@ -366,27 +583,58 @@ func (p *Proxy) ServeModels(w http.ResponseWriter, r *http.Request) {
 }
 
 // finish 收尾：按采样落 body，写明细。使用脱离取消的 context，避免客户端断开丢记录。
-func (p *Proxy) finish(ctx context.Context, rec *observ.RequestRecord, reqBody, respBody []byte) {
+// submitFinish 把收尾任务投递到异步 worker pool（不阻塞请求 goroutine）。
+// 队列满时降级：错误请求同步落库（不丢），成功采样直接丢弃并计数（任务书 §2.1）。
+func (p *Proxy) submitFinish(rec *observ.RequestRecord, reqBody, respBody []byte) {
+	job := finishJob{rec: rec, reqBody: reqBody, respBody: respBody}
+	select {
+	case p.finishQueue <- job:
+	default:
+		if !rec.IsSuccess {
+			p.doFinish(rec, reqBody, respBody)
+		} else {
+			p.dropped.Add(1)
+		}
+	}
+}
+
+// doFinish 在 worker 中执行：按采样落 body（带重试），再写明细。
+func (p *Proxy) doFinish(rec *observ.RequestRecord, reqBody, respBody []byte) {
 	if rec.CompletedAt.IsZero() {
 		rec.CompletedAt = time.Now()
 	}
 	rec.DurationMs = uint32(rec.CompletedAt.Sub(rec.RequestAt).Milliseconds())
-	bg := context.WithoutCancel(ctx)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	shouldStore := !rec.IsSuccess || rand.Float64() < p.d.SampleSuccess
 	if shouldStore && p.d.Bodies != nil {
-		if k, err := p.d.Bodies.Put(bg, rec.TraceID, "request", reqBody); err == nil {
+		if k, ok := p.putBody(ctx, rec.TraceID, "request", reqBody); ok {
 			rec.RequestBodyS3Key = k
 		}
 		if len(respBody) > 0 {
-			if k, err := p.d.Bodies.Put(bg, rec.TraceID, "response", respBody); err == nil {
+			if k, ok := p.putBody(ctx, rec.TraceID, "response", respBody); ok {
 				rec.ResponseBodyS3Key = k
 			}
 		}
 	}
 	if p.d.Sink != nil {
-		p.d.Sink.Write(bg, *rec)
+		p.d.Sink.Write(ctx, *rec)
 	}
+}
+
+// putBody 写 body 并按 S3WriteRetry 重试，全部失败则丢弃（任务书 §5.6）。
+func (p *Proxy) putBody(ctx context.Context, traceID, kind string, body []byte) (string, bool) {
+	retries := p.d.S3WriteRetry
+	if retries < 0 {
+		retries = 0
+	}
+	for i := 0; i <= retries; i++ {
+		if k, err := p.d.Bodies.Put(ctx, traceID, kind, body); err == nil {
+			return k, true
+		}
+	}
+	return "", false
 }
 
 func (p *Proxy) modelMapping(ctx context.Context, channelID int64) map[string]string {

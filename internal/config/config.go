@@ -150,6 +150,15 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("CG_S3_BUCKET"); v != "" {
 		cfg.S3.Bucket = v
 	}
+	if v := os.Getenv("CG_S3_ACCESS_KEY"); v != "" {
+		cfg.S3.AccessKey = v
+	}
+	if v := os.Getenv("CG_S3_SECRET_KEY"); v != "" {
+		cfg.S3.SecretKey = v
+	}
+	if v := os.Getenv("CG_REDIS_PASSWORD"); v != "" {
+		cfg.Redis.Password = v
+	}
 	if v := os.Getenv("CG_JWT_SECRET"); v != "" {
 		cfg.Auth.JWTSecret = v
 	}

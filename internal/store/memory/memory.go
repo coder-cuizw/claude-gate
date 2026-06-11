@@ -338,8 +338,10 @@ const SelfTestAPIKey = "cg-selftest-deadbeefdeadbeefdeadbeef"
 //
 // 包含一个绑定到本地 mock（custom）通道的分组与固定明文的客户 Key，
 // 使网关可离线端到端跑通。
-func (s *ConfigStore) Seed(encKey string) {
-	ctx := context.Background()
+func (s *ConfigStore) Seed(encKey string) { SeedConfigStore(context.Background(), s, encKey) }
+
+// SeedConfigStore 向任意 ConfigStore 写入一套演示种子数据（内存与真实库通用）。
+func SeedConfigStore(ctx context.Context, s store.ConfigStore, encKey string) {
 	_ = s.CreateUser(ctx, &domain.User{Email: "admin@claude-gate.io", PasswordHash: auth.HashSecret("admin123"), Role: "admin"})
 
 	mockCh := &domain.UpstreamChannel{Name: "本地 Mock 通道", Type: domain.ChannelCustom, Enabled: true, Config: map[string]any{}}

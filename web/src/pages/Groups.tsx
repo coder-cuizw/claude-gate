@@ -1,14 +1,40 @@
-import { Button, Card, Switch, Table } from 'antd'
+import { App, Button, Card, Switch, Table } from 'antd'
 import { EditOutlined, PlusOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { ChannelTag, StrategyTag } from '../components/tags'
-import { useGroups } from '../api/queries'
+import { useChannels, useGroups, useSaveGroup } from '../api/queries'
 import type { Group } from '../api/types'
 import { fmtInt } from '../utils/format'
 
 export function Groups() {
   const navigate = useNavigate()
+  const { message } = App.useApp()
   const groups = useGroups()
+  const channels = useChannels()
+  const saveGroup = useSaveGroup()
+
+  const onCreate = async () => {
+    const channelId = channels.data?.[0]?.id
+    if (!channelId) {
+      message.warning('请先创建上游通道')
+      return
+    }
+    try {
+      const res = (await saveGroup.mutateAsync({
+        name: `新分组-${Date.now() % 10000}`,
+        description: '',
+        channel_id: channelId,
+        enabled: true,
+        cache_strategy: { type: 'passthrough' },
+        transformer_config: [],
+        rate_limit_config: { rpm: 0, tpm: 0 },
+        retry_config: { max_retries: 0, backoff_ms: 0 },
+      })) as { id: number }
+      navigate(`/groups/${res.id}`)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '创建失败')
+    }
+  }
 
   const columns = [
     {
@@ -65,7 +91,7 @@ export function Groups() {
       styles={{ body: { padding: 18 } }}
       title={<span style={{ color: 'var(--cg-text-secondary)', fontSize: 13 }}>分组是 claude-gate 最核心的配置单元：绑定通道、缓存计费策略与改写流水线</span>}
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/groups/101')}>
+        <Button type="primary" icon={<PlusOutlined />} loading={saveGroup.isPending} onClick={onCreate}>
           新建分组
         </Button>
       }

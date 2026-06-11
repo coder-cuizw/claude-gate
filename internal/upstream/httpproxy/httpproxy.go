@@ -75,13 +75,19 @@ func (a *Adapter) buildRequest(ctx context.Context, req *domain.MessagesRequest,
 	for k, v := range a.opts.ExtraHeaders {
 		httpReq.Header.Set(k, v)
 	}
-	if key != nil && key.CredentialEncrypted != "" {
-		// 注：生产中此处应解密 CredentialEncrypted 得到明文凭证。
-		val := key.CredentialEncrypted
-		if a.opts.AuthScheme != "" {
-			val = a.opts.AuthScheme + " " + val
+	// 优先用运行时解密的明文凭证；未解密时回退原值（兼容未加密的种子数据）
+	if key != nil {
+		cred := key.Credential
+		if cred == "" {
+			cred = key.CredentialEncrypted
 		}
-		httpReq.Header.Set(a.opts.AuthHeader, val)
+		if cred != "" {
+			val := cred
+			if a.opts.AuthScheme != "" {
+				val = a.opts.AuthScheme + " " + val
+			}
+			httpReq.Header.Set(a.opts.AuthHeader, val)
+		}
 	}
 	if stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
