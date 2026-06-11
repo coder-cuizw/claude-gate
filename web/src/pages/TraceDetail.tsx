@@ -3,7 +3,7 @@ import { ArrowLeftOutlined, RedoOutlined, ThunderboltOutlined } from '@ant-desig
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ChannelTag, StatusTag } from '../components/tags'
-import { useGroups, useTrace } from '../api/queries'
+import { replayTrace, useGroups, useTrace } from '../api/queries'
 import type { Usage } from '../api/types'
 import { fmtDateTime, fmtInt, fmtMs } from '../utils/format'
 
@@ -45,9 +45,15 @@ export function TraceDetailPage() {
     return <Card loading className="cg-soft-card" />
   }
 
-  const doReplay = () => {
-    setReplayOpen(false)
-    message.success('已发起复现，新的 trace 正在执行（演示）')
+  const doReplay = async () => {
+    const v = await form.validateFields()
+    try {
+      const res = (await replayTrace(t.trace_id, { target_group_id: v.target_group_id, dry_run: v.dry_run, override_model: v.override_model })) as { trace_id?: string; dry_run?: boolean }
+      setReplayOpen(false)
+      message.success(v.dry_run ? '已解析（dry run），未真正发送' : `已复现，新 trace：${res.trace_id?.slice(0, 12)}…`)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '复现失败')
+    }
   }
 
   return (
