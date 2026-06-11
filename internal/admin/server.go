@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -72,6 +73,7 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	// 受保护资源
 	p := func(pattern string, h http.HandlerFunc) { mux.HandleFunc(pattern, s.auth(h)) }
 	p("GET /api/admin/me", s.handleMe)
+	p("POST /api/admin/me/password", s.handleChangePassword)
 
 	p("GET /api/admin/channels", s.listChannels)
 	p("POST /api/admin/channels", s.createChannel)
@@ -149,6 +151,40 @@ type claimsKey struct{}
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	c, _ := r.Context().Value(claimsKey{}).(*Claims)
 	ok(w, map[string]any{"email": c.Subject, "role": c.Role})
+}
+
+// handleChangePassword 修改当前登录用户的密码：校验原密码 + 新密码强度后落库。
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		OldPassword string `json:"old_password"`
+		NewPassword string `json:"new_password"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if len(body.NewPassword) < 8 {
+		fail(w, http.StatusBadRequest, "新密码至少 8 位")
+		return
+	}
+	if body.NewPassword == body.OldPassword {
+		fail(w, http.StatusBadRequest, "新密码不能与原密码相同")
+		return
+	}
+	c, _ := r.Context().Value(claimsKey{}).(*Claims)
+	u, err := s.d.Store.GetUserByEmail(r.Context(), c.Subject)
+	if err != nil {
+		fail(w, http.StatusUnauthorized, "用户不存在")
+		return
+	}
+	if !auth.VerifySecret(body.OldPassword, u.PasswordHash) {
+		fail(w, http.StatusBadRequest, "原密码不正确")
+		return
+	}
+	if err := s.d.Store.UpdateUserPassword(r.Context(), u.ID, auth.HashSecret(body.NewPassword)); err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ok(w, map[string]any{"updated": true})
 }
 
 // ---- 通道 ----
@@ -679,6 +715,14 @@ func decodeOptional(r *http.Request, v any) error {
 }
 
 func ok(w http.ResponseWriter, v any) {
+	// nil slice → 空数组 []，避免被 encoding/json 序列化成 null，
+	// 让前端 .filter/.map 链路免于 TypeError。
+	if v != nil {
+		rv := reflect.ValueOf(v)
+		if rv.Kind() == reflect.Slice && rv.IsNil() {
+			v = reflect.MakeSlice(rv.Type(), 0, 0).Interface()
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(v)

@@ -25,6 +25,7 @@ type ConfigStore interface {
 	GetUserByEmail(ctx context.Context, email string) (*domain.User, error)
 	ListUsers(ctx context.Context) ([]domain.User, error)
 	CreateUser(ctx context.Context, u *domain.User) error
+	UpdateUserPassword(ctx context.Context, userID int64, newHash string) error
 
 	// Channels
 	ListChannels(ctx context.Context) ([]domain.UpstreamChannel, error)

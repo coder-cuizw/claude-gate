@@ -14,10 +14,7 @@ interface AuthState {
 }
 
 /**
- * 鉴权状态（演示环境）。
- *
- * 真实环境下 token 来自管理后台登录接口签发的 JWT；这里持久化到 localStorage，
- * 演示模式下任意账号即可登录。
+ * 鉴权状态。token 来自管理后台 /api/admin/login 签发的 JWT，持久化到 localStorage。
  */
 export const useAuthStore = create<AuthState>()(
   persist(

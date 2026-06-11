@@ -74,7 +74,7 @@ export function AppLayout() {
         />
         <div style={{ position: 'absolute', bottom: 16, left: 0, right: 0, padding: '0 20px', color: 'var(--cg-text-secondary)', fontSize: 12 }}>
           <Tag bordered={false} color="default" style={{ borderRadius: 6 }}>
-            v0.1.0 · 演示数据
+            v0.1.0
           </Tag>
         </div>
       </Sider>

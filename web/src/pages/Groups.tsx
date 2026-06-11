@@ -1,4 +1,4 @@
-import { App, Button, Card, Switch, Table } from 'antd'
+import { App, Button, Card, Space, Switch, Table } from 'antd'
 import { EditOutlined, PlusOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { ChannelTag, StrategyTag } from '../components/tags'
@@ -47,17 +47,32 @@ export function Groups() {
         </div>
       ),
     },
-    { title: '通道', dataIndex: 'channel_type', width: 100, render: (t: Group['channel_type']) => <ChannelTag type={t} /> },
+    {
+      title: '绑定通道',
+      key: 'channel',
+      width: 220,
+      render: (_: unknown, g: Group) => (
+        <Space size={6}>
+          <ChannelTag type={g.channel_type} />
+          <span style={{ fontSize: 12.5 }}>{g.channel_name ?? `#${g.channel_id}`}</span>
+        </Space>
+      ),
+    },
     { title: '缓存策略', key: 'strategy', width: 110, render: (_: unknown, g: Group) => <StrategyTag type={g.cache_strategy.type} /> },
     {
       title: '限流 (rpm / tpm)',
       key: 'rate',
       width: 180,
-      render: (_: unknown, g: Group) => (
-        <span className="cg-mono" style={{ fontSize: 12 }}>
-          {fmtInt(g.rate_limit_config.rpm ?? 0)} / {fmtInt(g.rate_limit_config.tpm ?? 0)}
-        </span>
-      ),
+      render: (_: unknown, g: Group) => {
+        const rpm = g.rate_limit_config.rpm ?? 0
+        const tpm = g.rate_limit_config.tpm ?? 0
+        const fmt = (v: number) => (v > 0 ? fmtInt(v) : <span style={{ color: 'var(--cg-text-tertiary,#928e85)' }}>不限</span>)
+        return (
+          <span className="cg-mono" style={{ fontSize: 12 }}>
+            {fmt(rpm)} / {fmt(tpm)}
+          </span>
+        )
+      },
     },
     {
       title: 'Transformer',

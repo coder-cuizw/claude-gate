@@ -23,6 +23,9 @@ type Error struct {
 	UserMessage string
 	// Internal 是内部原始错误，仅用于日志，绝不返回给客户。
 	Internal error
+	// SkipPersist 标记客户端凭证类错误（未触达上游）。命中时网关不写入
+	// request_logs / 不计入大盘统计，避免被无效请求污染（如恶意扫接口）。
+	SkipPersist bool
 }
 
 // Error 实现 error 接口，输出包含内部链路，便于日志排查。
@@ -61,12 +64,12 @@ func AsError(err error) (*Error, bool) {
 
 // 预定义的常见错误。具体业务可在此基础上 Wrap 内部原因。
 var (
-	// 认证 / 鉴权相关
-	ErrMissingAPIKey  = &Error{Code: "missing_api_key", HTTPStatus: http.StatusUnauthorized, UserMessage: "缺少 Authorization 凭证"}
-	ErrInvalidAPIKey  = &Error{Code: "invalid_api_key", HTTPStatus: http.StatusUnauthorized, UserMessage: "API Key 不存在或无效"}
-	ErrAPIKeyExpired  = &Error{Code: "api_key_expired", HTTPStatus: http.StatusUnauthorized, UserMessage: "API Key 已过期"}
-	ErrAPIKeyDisabled = &Error{Code: "api_key_disabled", HTTPStatus: http.StatusForbidden, UserMessage: "API Key 已被禁用"}
-	ErrGroupDisabled  = &Error{Code: "group_disabled", HTTPStatus: http.StatusForbidden, UserMessage: "分组已被禁用"}
+	// 认证 / 鉴权相关：均 SkipPersist —— 客户端凭证问题，未触达上游，不计入统计
+	ErrMissingAPIKey  = &Error{Code: "missing_api_key", HTTPStatus: http.StatusUnauthorized, UserMessage: "缺少 Authorization 凭证", SkipPersist: true}
+	ErrInvalidAPIKey  = &Error{Code: "invalid_api_key", HTTPStatus: http.StatusUnauthorized, UserMessage: "API Key 不存在或无效", SkipPersist: true}
+	ErrAPIKeyExpired  = &Error{Code: "api_key_expired", HTTPStatus: http.StatusUnauthorized, UserMessage: "API Key 已过期", SkipPersist: true}
+	ErrAPIKeyDisabled = &Error{Code: "api_key_disabled", HTTPStatus: http.StatusForbidden, UserMessage: "API Key 已被禁用", SkipPersist: true}
+	ErrGroupDisabled  = &Error{Code: "group_disabled", HTTPStatus: http.StatusForbidden, UserMessage: "分组已被禁用", SkipPersist: true}
 
 	// 限流 / 背压相关
 	ErrRateLimited    = &Error{Code: "rate_limited", HTTPStatus: http.StatusTooManyRequests, UserMessage: "请求超过限流阈值"}

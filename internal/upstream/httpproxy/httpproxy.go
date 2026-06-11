@@ -11,12 +11,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/claude-gate/claude-gate/internal/domain"
 )
+
+// upstreamErrMsg 读上游错误响应体（截 2KB 防爆），拼成 "上游返回 N: <body>"。
+// 用于把 Kiro/官方/中转返回的真实错误信息（如 "request too large" / "rate limit"）
+// 透传到 error_message，便于排障。
+func upstreamErrMsg(resp *http.Response) string {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	snippet := strings.TrimSpace(string(body))
+	// 多行错误体压成一行，便于在 CH/前端单行展示
+	snippet = strings.Join(strings.Fields(snippet), " ")
+	if snippet == "" {
+		return fmt.Sprintf("上游返回 %d", resp.StatusCode)
+	}
+	return fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, snippet)
+}
 
 // Options 配置透传适配器。
 type Options struct {
@@ -107,7 +122,7 @@ func (a *Adapter) Send(ctx context.Context, req *domain.MessagesRequest, key *do
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, domain.ErrUpstreamFailure.WithMessage(fmt.Sprintf("上游返回 %d", resp.StatusCode))
+		return nil, domain.ErrUpstreamFailure.WithMessage(upstreamErrMsg(resp))
 	}
 	var out domain.MessagesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -128,8 +143,9 @@ func (a *Adapter) SendStream(ctx context.Context, req *domain.MessagesRequest, k
 		return nil, domain.ErrUpstreamFailure.Wrap(err)
 	}
 	if resp.StatusCode >= 400 {
+		msg := upstreamErrMsg(resp)
 		resp.Body.Close()
-		return nil, domain.ErrUpstreamFailure.WithMessage(fmt.Sprintf("上游返回 %d", resp.StatusCode))
+		return nil, domain.ErrUpstreamFailure.WithMessage(msg)
 	}
 
 	out := make(chan domain.StreamEvent, 16)

@@ -25,7 +25,7 @@ import (
 	"github.com/claude-gate/claude-gate/internal/upstream"
 )
 
-const maxBodyBytes = 16 << 20 // 单请求体上限 16MB
+const maxBodyBytes = 50 << 20 // 单请求体上限 50MB（覆盖长上下文 + 多轮历史 + tool_use 返回）
 
 // ProxyHandler 是网关代理入口（供 Server 路由）。
 type ProxyHandler interface {
@@ -159,7 +159,14 @@ func (p *Proxy) ServeMessages(w http.ResponseWriter, r *http.Request) {
 	rec := &observ.RequestRecord{TraceID: traceID, RequestAt: start}
 	var reqBody, respBody []byte
 	var tpmKey string
-	defer func() { p.submitFinish(rec, reqBody, respBody) }()
+	var skipPersist bool
+	defer func() {
+		// 鉴权类错误（客户端凭证问题，未触达上游）不进 request_logs、不进统计
+		if skipPersist {
+			return
+		}
+		p.submitFinish(rec, reqBody, respBody)
+	}()
 	// tpm 事后记账：按上游真实 token 累加到当前分钟窗口
 	defer func() {
 		if tpmKey != "" && p.d.Limiter != nil {
@@ -173,6 +180,28 @@ func (p *Proxy) ServeMessages(w http.ResponseWriter, r *http.Request) {
 		de, _ := domain.AsError(err)
 		if de == nil {
 			de = domain.ErrInternal
+		}
+		if de.SkipPersist {
+			skipPersist = true
+		} else if p.d.Logger != nil {
+			// 触达上游 / 网关侧的真实失败（非客户端凭证问题）：
+			// 必须打日志便于排障，避免上游 5xx/限流被静默吞掉。
+			lvl := slog.LevelWarn
+			if de.HTTPStatus >= 500 && de.Code != "upstream_failure" {
+				lvl = slog.LevelError // 网关内部错误更严重
+			}
+			attrs := []any{
+				"trace_id", traceID,
+				"code", de.Code,
+				"status", de.HTTPStatus,
+				"message", de.UserMessage,
+				"channel_id", rec.ChannelID,
+				"upstream_key_id", rec.UpstreamKeyID,
+			}
+			if de.Internal != nil {
+				attrs = append(attrs, "internal", de.Internal.Error())
+			}
+			p.d.Logger.Log(ctx, lvl, "请求失败", attrs...)
 		}
 		rec.IsSuccess = false
 		rec.StatusCode = de.HTTPStatus

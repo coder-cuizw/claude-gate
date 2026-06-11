@@ -101,6 +101,20 @@ func (s *Store) CreateUser(ctx context.Context, u *domain.User) error {
 	).Scan(&u.ID, &u.CreatedAt, &u.UpdatedAt)
 }
 
+func (s *Store) UpdateUserPassword(ctx context.Context, userID int64, newHash string) error {
+	ct, err := s.pool.Exec(ctx,
+		`UPDATE users SET password_hash=$1, updated_at=NOW() WHERE id=$2`,
+		newHash, userID,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("用户不存在: id=%d", userID)
+	}
+	return nil
+}
+
 // ---- Channels ----
 
 func (s *Store) ListChannels(ctx context.Context) ([]domain.UpstreamChannel, error) {

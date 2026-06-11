@@ -61,10 +61,10 @@ export function Dashboard() {
       {/* 指标卡 */}
       <Row gutter={[14, 14]}>
         <Col xs={12} md={8} xl={6}>
-          <StatCard label="总请求数" value={fmtCompact(o?.request_count ?? 0)} hint="所选时间窗口内的请求总量" trend={{ value: '8.4%', up: true, good: true }} loading={overview.isLoading} />
+          <StatCard label="总请求数" value={fmtCompact(o?.request_count ?? 0)} hint="所选时间窗口内的请求总量" loading={overview.isLoading} />
         </Col>
         <Col xs={12} md={8} xl={6}>
-          <StatCard label="成功率" value={o ? fmtPct(o.success_rate, 1) : '—'} trend={{ value: '0.3%', up: true, good: true }} loading={overview.isLoading} accent />
+          <StatCard label="成功率" value={o ? fmtPct(o.success_rate, 1) : '—'} loading={overview.isLoading} accent />
         </Col>
         <Col xs={12} md={8} xl={6}>
           <StatCard label="平均 TTFT" value={o ? fmtInt(o.avg_ttft_ms) : '—'} suffix="ms" hint="首 token 到达时间均值" loading={overview.isLoading} />
@@ -82,7 +82,7 @@ export function Dashboard() {
           <StatCard label="Token 消耗" value={o ? fmtCompact(o.total_tokens) : '—'} hint="计费口径的 token 总量" loading={overview.isLoading} />
         </Col>
         <Col xs={12} md={8} xl={6}>
-          <StatCard label="错误数" value={o ? fmtCompact(o.error_count) : '—'} trend={{ value: '2.1%', up: false, good: true }} loading={overview.isLoading} />
+          <StatCard label="错误数" value={o ? fmtCompact(o.error_count) : '—'} loading={overview.isLoading} />
         </Col>
       </Row>
 

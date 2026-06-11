@@ -1,106 +1,158 @@
-# claude-gate 开发环境编排：一键拉起依赖（PG / ClickHouse / Redis / MinIO）+ 网关 + 前端
-# 用法：cd deploy && docker compose up -d
+# claude-gate 生产编排：真实存储（PG / ClickHouse / Redis / MinIO）+ 网关 + 前端
+# 用法：cd deploy && docker compose --env-file ../.env up -d --build
+# 说明：
+#   - 全部组件在专属网络 claude-gate-net 内，经容器名互通；除 web(8081) 外不暴露任何端口
+#   - 网关以 CG_STORE=real 连真实存储，BuildReal 启动时自动迁移建表 + 初始化管理员
+name: claude-gate
+
 services:
   postgres:
     image: postgres:16-alpine
+    container_name: claude-gate-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: claude
-      POSTGRES_PASSWORD: claude
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-claude}
       POSTGRES_DB: claude_gate
-    ports:
-      - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U claude"]
+      test: ["CMD-SHELL", "pg_isready -U claude -d claude_gate"]
       interval: 5s
       timeout: 3s
       retries: 10
+    networks: [claude-gate-net]
 
   clickhouse:
     image: clickhouse/clickhouse-server:24-alpine
+    container_name: claude-gate-clickhouse
+    restart: unless-stopped
     environment:
       CLICKHOUSE_DB: claude_gate
       CLICKHOUSE_USER: claude
-      CLICKHOUSE_PASSWORD: claude
-    ports:
-      - "8123:8123"   # HTTP
-      - "9000:9000"   # native
+      CLICKHOUSE_PASSWORD: ${CH_PASSWORD:-claude}
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
     volumes:
       - ch_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [claude-gate-net]
 
   redis:
     image: redis:7-alpine
+    container_name: claude-gate-redis
+    restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [claude-gate-net]
 
   minio:
     image: minio/minio:latest
+    container_name: claude-gate-minio
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minio
-      MINIO_ROOT_PASSWORD: minio123
-    ports:
-      - "9100:9000"   # S3 API（避开 ClickHouse 的 9000）
-      - "9001:9001"   # 控制台
+      MINIO_ROOT_USER: ${MINIO_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-minio123}
     volumes:
       - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [claude-gate-net]
 
-  # 迁移先于网关执行：建表后退出（gateway 依赖其成功完成）
+  # 一次性迁移：建 PG / ClickHouse 全部表，幂等，成功退出后 gateway 才启动
   migrate:
+    image: claude-gate-gateway:latest
+    container_name: claude-gate-migrate
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
     entrypoint: ["/usr/local/bin/migrate", "--dir", "/app/migrations"]
+    restart: "no"
     depends_on:
       postgres: { condition: service_healthy }
-      clickhouse: { condition: service_started }
+      clickhouse: { condition: service_healthy }
     environment:
-      CG_POSTGRES_DSN: postgres://claude:claude@postgres:5432/claude_gate?sslmode=disable
-      CG_CLICKHOUSE_DSN: clickhouse://claude:claude@clickhouse:9000/claude_gate
-    restart: "no"
+      CG_POSTGRES_DSN: postgres://claude:${PG_PASSWORD:-claude}@claude-gate-postgres:5432/claude_gate?sslmode=disable
+      CG_CLICKHOUSE_DSN: clickhouse://claude:${CH_PASSWORD:-claude}@claude-gate-clickhouse:9000/claude_gate
+    networks: [claude-gate-net]
 
   gateway:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
+    image: claude-gate-gateway:latest
+    container_name: claude-gate-gateway
+    restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
-      clickhouse: { condition: service_started }
+      clickhouse: { condition: service_healthy }
       redis: { condition: service_started }
       minio: { condition: service_started }
       migrate: { condition: service_completed_successfully }
     environment:
-      CG_STORE: real
-      CG_POSTGRES_DSN: postgres://claude:claude@postgres:5432/claude_gate?sslmode=disable
-      CG_CLICKHOUSE_DSN: clickhouse://claude:claude@clickhouse:9000/claude_gate
-      CG_REDIS_ADDR: redis:6379
-      CG_S3_ENDPOINT: minio:9000
+      CG_STORE: "real"
+      CG_SERVER_ADDR: ":8791"
+      CG_POSTGRES_DSN: postgres://claude:${PG_PASSWORD:-claude}@claude-gate-postgres:5432/claude_gate?sslmode=disable
+      CG_CLICKHOUSE_DSN: clickhouse://claude:${CH_PASSWORD:-claude}@claude-gate-clickhouse:9000/claude_gate
+      CG_REDIS_ADDR: claude-gate-redis:6379
+      CG_REDIS_DB: "0"
+      CG_S3_ENDPOINT: claude-gate-minio:9000
       CG_S3_BUCKET: claude-gate
-      CG_S3_ACCESS_KEY: minio
-      CG_S3_SECRET_KEY: minio123
-      CG_JWT_SECRET: please-change-me-in-prod
-      CG_ENCRYPTION_KEY: please-change-me-32chars-minimum-secret
-      CG_LOG_LEVEL: info
-    ports:
-      - "8791:8791"
+      CG_S3_ACCESS_KEY: ${MINIO_USER:-minio}
+      CG_S3_SECRET_KEY: ${MINIO_PASSWORD:-minio123}
+      CG_S3_USE_SSL: "false"
+      CG_S3_REGION: us-east-1
+      CG_CLICKHOUSE_MAX_OPEN: "10"
+      CG_JWT_SECRET: ${CG_JWT_SECRET:?must set in .env}
+      CG_ENCRYPTION_KEY: ${CG_ENCRYPTION_KEY:?must set in .env}
+      CG_LOG_LEVEL: ${CG_LOG_LEVEL:-info}
+      CG_GLOBAL_MAX_IN_FLIGHT: ${CG_GLOBAL_MAX_IN_FLIGHT:-6000}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8791/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    networks: [claude-gate-net]
 
   web:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web
+    image: claude-gate-web:latest
+    container_name: claude-gate-web
+    restart: unless-stopped
     depends_on:
-      - gateway
+      gateway:
+        condition: service_healthy
     ports:
-      - "8081:80"
+      - "${CG_WEB_PORT:-8081}:80"
+    networks: [claude-gate-net]
 
 volumes:
   pg_data:
   ch_data:
   redis_data:
   minio_data:
+
+networks:
+  claude-gate-net:
+    name: claude-gate-net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

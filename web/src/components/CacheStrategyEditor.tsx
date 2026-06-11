@@ -148,7 +148,7 @@ export function CacheStrategyEditor({ value, onChange }: { value: CacheStrategy;
                 <span style={{ fontSize: 12.5, color: 'var(--cg-text-secondary)', marginRight: 8 }}>可用变量：</span>
                 <Space size={[4, 6]} wrap>
                   {FORMULA_VARS.map((v) => (
-                    <Tooltip key={v} title="点击插入到当前聚焦的输入框（演示中直接展示）">
+                    <Tooltip key={v} title="可用变量：填入公式时直接引用">
                       <Tag className="cg-mono" style={{ fontSize: 11, cursor: 'default' }}>{v}</Tag>
                     </Tooltip>
                   ))}

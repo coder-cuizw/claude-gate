@@ -55,6 +55,13 @@ export function Traces() {
       render: (v: number, r: TraceListItem) =>
         r.is_streaming ? <span style={{ color: 'var(--cg-accent,#C45A35)', fontWeight: 600 }}>{fmtMs(v)}</span> : <span style={{ color: 'var(--cg-text-tertiary,#928e85)' }}>{fmtMs(v)}</span>,
     },
+    {
+      title: '耗时',
+      dataIndex: 'duration_ms',
+      width: 92,
+      align: 'right' as const,
+      render: (v: number) => <span style={{ color: 'var(--cg-text-tertiary,#928e85)' }}>{fmtMs(v)}</span>,
+    },
     { title: '输入', dataIndex: ['billed_usage', 'input_tokens'], width: 86, align: 'right' as const, render: tokCell },
     { title: '输出', dataIndex: ['billed_usage', 'output_tokens'], width: 86, align: 'right' as const, render: tokCell },
     { title: '缓存创建', dataIndex: ['billed_usage', 'cache_creation_tokens'], width: 98, align: 'right' as const, render: tokCell },

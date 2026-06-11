@@ -2,9 +2,15 @@
 # 阶段一：构建静态产物
 FROM node:22-alpine AS builder
 WORKDIR /app
-RUN corepack enable
+# 固定 pnpm 版本，避免 corepack 每次拉最新版导致行为漂移
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 COPY web/package.json web/pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile || pnpm install
+# pnpm v9 只把"忽略构建脚本"当告警（v10+ 会以 ERR_PNPM_IGNORED_BUILDS 退出码1 失败），
+# 且读取 package.json 的 pnpm.onlyBuiltDependencies 放行 esbuild（vite 核心，需原生二进制）。
+# 再显式 rebuild 确保 esbuild 平台二进制就位。
+RUN pnpm install --frozen-lockfile \
+ && pnpm rebuild esbuild
 COPY web/ ./
 RUN pnpm build
 

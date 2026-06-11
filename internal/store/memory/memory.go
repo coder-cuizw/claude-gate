@@ -6,6 +6,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -79,6 +80,18 @@ func (s *ConfigStore) CreateUser(_ context.Context, u *domain.User) error {
 	u.CreatedAt = time.Now()
 	cp := *u
 	s.users[u.ID] = &cp
+	return nil
+}
+
+func (s *ConfigStore) UpdateUserPassword(_ context.Context, userID int64, newHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.users[userID]
+	if !ok {
+		return fmt.Errorf("用户不存在: id=%d", userID)
+	}
+	u.PasswordHash = newHash
+	u.UpdatedAt = time.Now()
 	return nil
 }
 

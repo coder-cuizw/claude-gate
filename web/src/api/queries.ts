@@ -48,7 +48,9 @@ export const useChannels = () =>
   useQuery({
     queryKey: ['channels'],
     queryFn: async (): Promise<Channel[]> => {
-      const [chs, keys] = await Promise.all([http.get<Channel[]>('/api/admin/channels'), http.get<UpstreamKey[]>('/api/admin/upstream-keys')])
+      const [chsRes, keysRes] = await Promise.all([http.get<Channel[]>('/api/admin/channels'), http.get<UpstreamKey[]>('/api/admin/upstream-keys')])
+      const chs = chsRes ?? []
+      const keys = keysRes ?? []
       return chs.map((c) => ({ ...c, config: c.config ?? {}, key_count: keys.filter((k) => k.channel_id === c.id).length }))
     },
   })
@@ -60,10 +62,11 @@ export const useUpstreamKeys = (channelId?: number) =>
   })
 
 // —— 分组（补 channel_name / channel_type）——
-async function enrichGroups(gs: Group[]): Promise<Group[]> {
-  const chs = await http.get<Channel[]>('/api/admin/channels')
+async function enrichGroups(gs: Group[] | null | undefined): Promise<Group[]> {
+  const list = gs ?? []
+  const chs = (await http.get<Channel[]>('/api/admin/channels')) ?? []
   const byId = new Map(chs.map((c) => [c.id, c]))
-  return gs.map((g) => ({ ...g, channel_name: byId.get(g.channel_id)?.name ?? '—', channel_type: byId.get(g.channel_id)?.type ?? 'custom' }))
+  return list.map((g) => ({ ...g, channel_name: byId.get(g.channel_id)?.name ?? '—', channel_type: byId.get(g.channel_id)?.type ?? 'custom' }))
 }
 
 export const useGroups = () => useQuery({ queryKey: ['groups'], queryFn: async () => enrichGroups(await http.get<Group[]>('/api/admin/groups')) })
@@ -80,7 +83,9 @@ export const useApiKeys = () =>
   useQuery({
     queryKey: ['api-keys'],
     queryFn: async (): Promise<ApiKey[]> => {
-      const [ks, gs] = await Promise.all([http.get<ApiKey[]>('/api/admin/api-keys'), http.get<Group[]>('/api/admin/groups')])
+      const [ksRes, gsRes] = await Promise.all([http.get<ApiKey[]>('/api/admin/api-keys'), http.get<Group[]>('/api/admin/groups')])
+      const ks = ksRes ?? []
+      const gs = gsRes ?? []
       const byId = new Map(gs.map((g) => [g.id, g]))
       return ks.map((k) => ({ ...k, group_name: byId.get(k.group_id)?.name ?? '—', request_count: k.request_count ?? 0, last_used_at: k.last_used_at ?? null }))
     },
@@ -100,10 +105,11 @@ export const useTraces = (opts: { status?: string; channel_type?: string; group_
       const q = new URLSearchParams({ status: opts.status ?? 'all', page: String(opts.page), page_size: String(opts.page_size) })
       if (opts.channel_type && opts.channel_type !== 'all') q.set('channel_type', opts.channel_type)
       if (opts.group_id) q.set('group_id', String(opts.group_id))
-      const [page, gs] = await Promise.all([
+      const [page, gsRes] = await Promise.all([
         http.get<Paged<TraceListItem>>(`/api/admin/traces?${q.toString()}`),
         http.get<Group[]>('/api/admin/groups'),
       ])
+      const gs = gsRes ?? []
       const byId = new Map(gs.map((g) => [g.id, g]))
       const items = (page.items ?? []).map((r) => ({ ...r, group_name: byId.get(r.group_id)?.name ?? '—', total_tokens: usageTotal(r.billed_usage) }))
       return { ...page, items }
@@ -114,12 +120,13 @@ export const useTrace = (traceId: string) =>
   useQuery({
     queryKey: ['trace', traceId],
     queryFn: async (): Promise<TraceDetail> => {
-      const [d, gs] = await Promise.all([
+      const [d, gsRes] = await Promise.all([
         http.get<{ record: TraceListItem & { api_key_id: number; upstream_key_id: number; error_message?: string; billed_usage: TraceDetail['billed_usage']; upstream_usage: TraceDetail['upstream_usage'] }; request_body?: unknown; response_body?: unknown }>(
           `/api/admin/traces/${traceId}`,
         ),
         http.get<Group[]>('/api/admin/groups'),
       ])
+      const gs = gsRes ?? []
       const r = d.record
       const g = gs.find((x) => x.id === r.group_id)
       return {
@@ -214,3 +221,7 @@ export const useDeleteModelMapping = () => {
   const inv = useInvalidate(['model-mappings'])
   return useMutation({ mutationFn: (id: number) => http.del(`/api/admin/model-mappings/${id}`), onSuccess: inv })
 }
+
+// —— 管理员账号 ——
+export const useChangePassword = () =>
+  useMutation({ mutationFn: (b: { old_password: string; new_password: string }) => http.post('/api/admin/me/password', b) })

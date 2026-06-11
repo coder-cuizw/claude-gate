@@ -66,6 +66,9 @@ type components struct {
 	sampleSuccess float64
 	ready         func() bool
 	closers       []func(context.Context) error
+	// registryExtras 在生产注册表（DefaultRegistry）基础上追加适配器；
+	// 生产装配为 nil，BuildMemory 注入 RegisterMock 以启用本地 mock 通道。
+	registryExtras func(*upstream.Registry)
 }
 
 // BuildMemory 用内存实现装配整套服务，并写入演示种子数据。
@@ -95,8 +98,9 @@ func BuildMemory(cfg config.Config, logger *slog.Logger) (*App, error) {
 
 	return assemble(cfg, logger, components{
 		cfgStore: cfgStore, cache: cache, sink: obs, bodies: obs, metrics: obs, limiter: limiter,
-		sampleSuccess: 1.0, // 演示模式全量留存 body
-		ready: func() bool { return true },
+		sampleSuccess:  1.0, // 演示模式全量留存 body
+		registryExtras: upstream.RegisterMock,
+		ready:          func() bool { return true },
 		// sink(obs).Close 由 assemble 统一追加；此处仅限流器
 		closers: []func(context.Context) error{
 			func(context.Context) error { limiter.Close(); return nil },
@@ -138,10 +142,7 @@ func BuildReal(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Ap
 	}
 
 	ensureAdmin(ctx, pg, logger)
-	if chs, _ := pg.ListChannels(ctx); len(chs) == 0 {
-		memory.SeedConfigStore(ctx, pg, encKeyOf(cfg))
-		logger.Info("真实库首次启动，已写入演示种子数据（含自测 Key）")
-	}
+	// 生产环境不再自动写入演示数据；通道、Key、分组由管理员通过控制台创建。
 
 	ready := func() bool {
 		c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -174,6 +175,9 @@ func assemble(cfg config.Config, logger *slog.Logger, c components) (*App, error
 	resolver := auth.NewResolver(authAdapter)
 
 	registry := upstream.DefaultRegistry()
+	if c.registryExtras != nil {
+		c.registryExtras(registry)
+	}
 	pool := keypool.New(0)
 	loadPoolKeys(ctx, c.cfgStore, pool)
 	// 运行时通过管理 API 新增/启停 Key 后，重载该通道的选择池使其立即生效

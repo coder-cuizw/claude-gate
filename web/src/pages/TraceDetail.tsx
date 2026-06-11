@@ -1,14 +1,54 @@
-import { App, Button, Card, Col, Descriptions, Form, Modal, Row, Select, Switch, Table, Tabs, Tag } from 'antd'
-import { ArrowLeftOutlined, RedoOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { App, Button, Card, Col, Descriptions, Form, Modal, Row, Select, Switch, Table, Tabs, Tag, Tooltip } from 'antd'
+import { ArrowLeftOutlined, CodeOutlined, CopyOutlined, RedoOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ChannelTag, StatusTag } from '../components/tags'
+import { http } from '../api/client'
 import { replayTrace, useGroups, useTrace } from '../api/queries'
 import type { Usage } from '../api/types'
 import { fmtDateTime, fmtInt, fmtMs } from '../utils/format'
 
-function CodeBlock({ value }: { value: unknown }) {
-  return <div className="cg-code">{JSON.stringify(value, null, 2)}</div>
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch { /* fall through to textarea fallback */ }
+  // 非 HTTPS 或老浏览器降级：用临时 textarea + execCommand
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.position = 'fixed'
+  ta.style.opacity = '0'
+  document.body.appendChild(ta)
+  ta.select()
+  const ok = document.execCommand('copy')
+  document.body.removeChild(ta)
+  return ok
+}
+
+function CodeBlock({ value, label = '内容' }: { value: unknown; label?: string }) {
+  const { message } = App.useApp()
+  const text = value === undefined || value === null ? '' : (typeof value === 'string' ? value : JSON.stringify(value, null, 2))
+  const empty = !text
+  return (
+    <div style={{ position: 'relative' }}>
+      <div style={{ position: 'absolute', top: 6, right: 6, zIndex: 1 }}>
+        <Tooltip title={empty ? '无内容可复制' : `复制${label}`}>
+          <Button
+            size="small"
+            icon={<CopyOutlined />}
+            disabled={empty}
+            onClick={async () => {
+              if (await copyText(text)) message.success(`${label}已复制`)
+              else message.error('复制失败')
+            }}
+          />
+        </Tooltip>
+      </div>
+      <div className="cg-code">{empty ? <span style={{ color: 'var(--cg-text-tertiary,#928e85)' }}>（未采样或为空）</span> : text}</div>
+    </div>
+  )
 }
 
 function UsageTable({ billed, upstream }: { billed: Usage; upstream: Usage }) {
@@ -56,6 +96,30 @@ export function TraceDetailPage() {
     }
   }
 
+  // 复制为 curl：reveal 客户 Key 明文，拼出可直接执行的命令
+  const copyAsCurl = async () => {
+    if (!t.request_body) {
+      message.warning('请求体为空（可能未采样），无法生成 curl')
+      return
+    }
+    try {
+      const r = await http.get<{ plaintext: string }>(`/api/admin/api-keys/${t.api_key_id}/reveal`)
+      const url = `${window.location.origin}/v1/messages`
+      const bodyStr = typeof t.request_body === 'string' ? t.request_body : JSON.stringify(t.request_body)
+      // 单引号 body 内的单引号转义：'\''
+      const escaped = bodyStr.replace(/'/g, "'\\''")
+      const streamFlag = t.is_streaming ? ' \\\n  --no-buffer' : ''
+      const curl = `curl -X POST '${url}' \\
+  -H 'Authorization: Bearer ${r.plaintext}' \\
+  -H 'Content-Type: application/json'${streamFlag} \\
+  -d '${escaped}'`
+      if (await copyText(curl)) message.success('curl 已复制（含完整客户 Key，请勿外传）')
+      else message.error('复制失败')
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '获取客户 Key 失败')
+    }
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -64,7 +128,10 @@ export function TraceDetailPage() {
         </Button>
         <span className="cg-mono" style={{ fontSize: 13, color: 'var(--cg-text-secondary)' }}>{t.trace_id}</span>
         <StatusTag success={t.is_success} code={t.status_code} />
-        <Button type="primary" icon={<RedoOutlined />} style={{ marginLeft: 'auto' }} onClick={() => setReplayOpen(true)}>
+        <Button icon={<CodeOutlined />} style={{ marginLeft: 'auto' }} onClick={copyAsCurl}>
+          复制为 curl
+        </Button>
+        <Button type="primary" icon={<RedoOutlined />} onClick={() => setReplayOpen(true)}>
           一键复现
         </Button>
       </div>
@@ -107,9 +174,9 @@ export function TraceDetailPage() {
       <Card className="cg-soft-card" styles={{ body: { padding: 18 } }}>
         <Tabs
           items={[
-            { key: 'req', label: '请求 Body', children: <CodeBlock value={t.request_body} /> },
-            { key: 'resp', label: '响应 Body', children: <CodeBlock value={t.response_body} /> },
-            { key: 'meta', label: 'Meta（headers / 连接）', children: <CodeBlock value={t.meta} /> },
+            { key: 'req', label: '请求 Body', children: <CodeBlock value={t.request_body} label="请求 Body" /> },
+            { key: 'resp', label: '响应 Body', children: <CodeBlock value={t.response_body} label="响应 Body" /> },
+            { key: 'meta', label: 'Meta（headers / 连接）', children: <CodeBlock value={t.meta} label="Meta" /> },
           ]}
         />
       </Card>

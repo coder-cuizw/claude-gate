@@ -85,8 +85,15 @@ export function GroupEdit() {
               <Row gutter={12}>
                 <Col span={12}><Form.Item name="name" label="分组名称" rules={[{ required: true }]}><Input /></Form.Item></Col>
                 <Col span={12}>
-                  <Form.Item name="channel_id" label="绑定通道">
-                    <Select options={(channels.data ?? []).map((c) => ({ label: `${c.name}（${c.type}）`, value: c.id }))} />
+                  <Form.Item name="channel_id" label="绑定通道" extra="请认准 base_url，避免同类型通道选错">
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      options={(channels.data ?? []).map((c) => ({
+                        label: `${c.name}（${c.type}） · ${c.base_url || '—'}`,
+                        value: c.id,
+                      }))}
+                    />
                   </Form.Item>
                 </Col>
               </Row>
@@ -96,12 +103,12 @@ export function GroupEdit() {
           </Col>
 
           <Col xs={24} lg={10}>
-            <Card title="限流与重试" className="cg-soft-card" styles={{ body: { padding: 18 } }}>
+            <Card title="限流与重试" className="cg-soft-card" styles={{ body: { padding: 18 } }} extra={<span style={{ fontSize: 12, color: 'var(--cg-text-secondary)' }}>留空或 0 = 不启用（纯透传）</span>}>
               <Row gutter={12}>
-                <Col span={12}><Form.Item name={['rate_limit_config', 'rpm']} label="RPM（每分钟请求）"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col>
-                <Col span={12}><Form.Item name={['rate_limit_config', 'tpm']} label="TPM（每分钟 tokens）"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col>
-                <Col span={12}><Form.Item name={['retry_config', 'max_retries']} label="最大重试次数"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col>
-                <Col span={12}><Form.Item name={['retry_config', 'backoff_ms']} label="重试退避 (ms)"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col>
+                <Col span={12}><Form.Item name={['rate_limit_config', 'rpm']} label="RPM（每分钟请求）" extra="0 = 不限流"><InputNumber min={0} placeholder="不限" style={{ width: '100%' }} /></Form.Item></Col>
+                <Col span={12}><Form.Item name={['rate_limit_config', 'tpm']} label="TPM（每分钟 tokens）" extra="0 = 不限流"><InputNumber min={0} placeholder="不限" style={{ width: '100%' }} /></Form.Item></Col>
+                <Col span={12}><Form.Item name={['retry_config', 'max_retries']} label="最大重试次数" extra="0 = 失败不重试"><InputNumber min={0} placeholder="不重试" style={{ width: '100%' }} /></Form.Item></Col>
+                <Col span={12}><Form.Item name={['retry_config', 'backoff_ms']} label="重试退避 (ms)" extra="仅在重试次数 > 0 时生效"><InputNumber min={0} placeholder="0" style={{ width: '100%' }} /></Form.Item></Col>
               </Row>
             </Card>
           </Col>

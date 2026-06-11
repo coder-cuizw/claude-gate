@@ -99,7 +99,9 @@ export interface TraceListItem {
 }
 
 export interface TraceDetail extends TraceListItem {
+  api_key_id: number
   api_key_name: string
+  upstream_key_id: number
   upstream_key_name: string
   error_message?: string
   billed_usage: Usage
