@@ -1,16 +1,20 @@
 // Package app 是装配根（composition root）：把存储、缓存、解析器、上游、
 // 代理引擎、管理 API、静态前端组装为单一 http.Handler（任务书 §8 同进程）。
 //
-// 当前提供内存模式（memory）：零外部依赖即可端到端运行与自测；真实存储
-// （PG/CH/Redis/S3）实现同样接口后可在此切换接入。
+// 两种装配模式：
+//   - BuildMemory：内存实现 + 种子数据，零外部依赖即可端到端运行与自测；
+//   - BuildReal：连真实 PG/Redis/ClickHouse/S3，数据真正落库，readyz 真探活。
 package app
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/claude-gate/claude-gate/internal/admin"
@@ -21,7 +25,11 @@ import (
 	"github.com/claude-gate/claude-gate/internal/observ"
 	"github.com/claude-gate/claude-gate/internal/store"
 	"github.com/claude-gate/claude-gate/internal/store/authstore"
+	chstore "github.com/claude-gate/claude-gate/internal/store/clickhouse"
 	"github.com/claude-gate/claude-gate/internal/store/memory"
+	pgstore "github.com/claude-gate/claude-gate/internal/store/postgres"
+	redisstore "github.com/claude-gate/claude-gate/internal/store/redis"
+	s3store "github.com/claude-gate/claude-gate/internal/store/s3"
 	"github.com/claude-gate/claude-gate/internal/upstream"
 	"github.com/claude-gate/claude-gate/internal/upstream/keypool"
 )
@@ -32,7 +40,30 @@ type App struct {
 	Config  config.Config
 	Logger  *slog.Logger
 
-	sink observ.Sink
+	closers []func(context.Context) error
+}
+
+// Close 依次关闭所有资源（落库缓冲、连接池等）。
+func (a *App) Close(ctx context.Context) error {
+	var firstErr error
+	for _, c := range a.closers {
+		if err := c(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// components 是装配所需的存储与观测组件（内存或真实由调用方决定）。
+type components struct {
+	cfgStore      store.ConfigStore
+	cache         store.Cache
+	sink          observ.Sink
+	bodies        observ.BodyStore
+	metrics       observ.MetricsReader
+	sampleSuccess float64
+	ready         func() bool
+	closers       []func(context.Context) error
 }
 
 // BuildMemory 用内存实现装配整套服务，并写入演示种子数据。
@@ -40,89 +71,168 @@ func BuildMemory(cfg config.Config, logger *slog.Logger) (*App, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	encKey := cfg.Auth.EncryptionKey
-	if encKey == "" {
-		encKey = "claude-gate-dev-encryption-key"
-	}
-
-	// 配置存储 + 种子
+	encKey := encKeyOf(cfg)
 	cfgStore := memory.NewConfigStore()
 	cfgStore.Seed(encKey)
 	cache := memory.NewCache()
 
-	// 观测存储（Sink + BodyStore + MetricsReader）+ 演示历史明细
 	obs := observ.NewMemoryStore()
 	ctx := context.Background()
 	channelByType := map[domain.ChannelType]int64{}
-	var passthroughGroupID int64
 	if chs, err := cfgStore.ListChannels(ctx); err == nil {
 		for _, ch := range chs {
 			channelByType[ch.Type] = ch.ID
 		}
 	}
+	var firstGroup int64
 	if gs, err := cfgStore.ListGroups(ctx); err == nil && len(gs) > 0 {
-		passthroughGroupID = gs[0].ID
+		firstGroup = gs[0].ID
 	}
-	obs.SeedDemo(channelByType, passthroughGroupID)
+	obs.SeedDemo(channelByType, firstGroup)
 
-	// 解析器（带缓存的 auth.Store 适配）
-	authAdapter := authstore.New(cfgStore, cache, cfg.Auth.APIKeyTTLSec)
+	return assemble(cfg, logger, components{
+		cfgStore: cfgStore, cache: cache, sink: obs, bodies: obs, metrics: obs,
+		sampleSuccess: 1.0, // 演示模式全量留存 body
+		ready:         func() bool { return true },
+		closers:       []func(context.Context) error{obs.Close},
+	})
+}
+
+// BuildReal 连接真实存储装配整套服务。数据真正落库，readyz 探活全部依赖。
+func BuildReal(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	pg, err := pgstore.New(ctx, cfg.Postgres.DSN)
+	if err != nil {
+		return nil, err
+	}
+	rds, err := redisstore.New(ctx, cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+	if err != nil {
+		pg.Close()
+		return nil, err
+	}
+	chAddr, chDB, chUser, chPass := parseCHDSN(cfg.ClickHouse.DSN)
+	ch, err := chstore.New(ctx, chstore.Options{Addr: chAddr, Database: chDB, Username: chUser, Password: chPass, Logger: logger})
+	if err != nil {
+		pg.Close()
+		_ = rds.Close()
+		return nil, err
+	}
+	s3s, err := s3store.New(ctx, s3store.Options{
+		Endpoint: cfg.S3.Endpoint, AccessKey: cfg.S3.AccessKey, SecretKey: cfg.S3.SecretKey,
+		Bucket: cfg.S3.Bucket, UseSSL: cfg.S3.UseSSL,
+	})
+	if err != nil {
+		pg.Close()
+		_ = rds.Close()
+		_ = ch.Close(ctx)
+		return nil, err
+	}
+
+	ensureAdmin(ctx, pg, logger)
+	if chs, _ := pg.ListChannels(ctx); len(chs) == 0 {
+		memory.SeedConfigStore(ctx, pg, encKeyOf(cfg))
+		logger.Info("真实库首次启动，已写入演示种子数据（含自测 Key）")
+	}
+
+	ready := func() bool {
+		c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return pg.Ping(c) == nil && rds.Ping(c) == nil && ch.Ping(c) == nil && s3s.Ping(c) == nil
+	}
+	sample := cfg.Sampling.SuccessRate
+	if sample <= 0 {
+		sample = 0.01
+	}
+	logger.Info("已连接真实存储", "pg", true, "redis", cfg.Redis.Addr, "clickhouse", chAddr, "s3", cfg.S3.Endpoint)
+	return assemble(cfg, logger, components{
+		cfgStore: pg, cache: rds, sink: ch, bodies: s3s, metrics: ch,
+		sampleSuccess: sample, ready: ready,
+		closers: []func(context.Context) error{
+			ch.Close, // 先 flush 落库缓冲
+			func(context.Context) error { pg.Close(); return nil },
+			func(context.Context) error { return rds.Close() },
+		},
+	})
+}
+
+// assemble 是公共装配逻辑：网关 + 管理 API + 静态前端。
+func assemble(cfg config.Config, logger *slog.Logger, c components) (*App, error) {
+	ctx := context.Background()
+	encKey := encKeyOf(cfg)
+
+	authAdapter := authstore.New(c.cfgStore, c.cache, cfg.Auth.APIKeyTTLSec)
 	resolver := auth.NewResolver(authAdapter)
 
-	// 上游注册表 + Key 选择器（加载各通道 Key）
 	registry := upstream.DefaultRegistry()
 	pool := keypool.New(0)
-	loadPoolKeys(ctx, cfgStore, pool)
+	loadPoolKeys(ctx, c.cfgStore, pool)
+	// 运行时通过管理 API 新增/启停 Key 后，重载该通道的选择池使其立即生效
+	reloadKeys := func(rctx context.Context, channelID int64) {
+		keys, err := c.cfgStore.ListUpstreamKeys(rctx, channelID)
+		if err != nil {
+			return
+		}
+		ptrs := make([]*domain.UpstreamKey, 0, len(keys))
+		for i := range keys {
+			k := keys[i]
+			ptrs = append(ptrs, &k)
+		}
+		pool.Load(channelID, ptrs)
+	}
 
-	// 代理引擎
 	proxy := gateway.NewProxy(gateway.ProxyDeps{
 		Resolver:      resolver,
 		Registry:      registry,
 		Pool:          pool,
-		ConfigStore:   cfgStore,
-		Sink:   obs,
-		Bodies: obs,
-		Logger: logger,
-		// 内存演示模式下全量留存 body，便于明细详情与请求复现开箱即用；
-		// 生产真实模式应回落到 cfg.Sampling.SuccessRate（默认 1% 采样）。
-		SampleSuccess: 1.0,
+		ConfigStore:   c.cfgStore,
+		Sink:          c.sink,
+		Bodies:        c.bodies,
+		Logger:        logger,
+		SampleSuccess: c.sampleSuccess,
 		Timeout:       time.Duration(cfg.Server.RequestTimeout) * time.Second,
 	})
 
-	// 组装单一 mux：网关 + 管理 API + 静态前端
 	mux := http.NewServeMux()
-	gw := gateway.NewServer(logger, func() bool { return true })
+	gw := gateway.NewServer(logger, c.ready)
 	gw.SetProxy(proxy)
 	gw.Mount(mux)
 
 	adminSrv := admin.NewServer(admin.Deps{
-		Store:       cfgStore,
-		Metrics:     obs,
-		Bodies:      obs,
-		Replayer:    proxy,
-		Invalidator: authAdapter,
+		Store: c.cfgStore, Metrics: c.metrics, Bodies: c.bodies, Replayer: proxy, Invalidator: authAdapter,
+		KeyReloader: reloadKeys,
 		JWTSecret:   orDefault(cfg.Auth.JWTSecret, "claude-gate-dev-jwt-secret"),
-		JWTTTL:      time.Duration(maxInt(cfg.Auth.JWTTTLMinutes, 1440)) * time.Minute,
-		EncKey:      encKey,
-		Logger:      logger,
+		JWTTTL:    time.Duration(maxInt(cfg.Auth.JWTTTLMinutes, 1440)) * time.Minute,
+		EncKey:    encKey, Logger: logger,
 	})
 	adminSrv.Mount(mux)
-
 	mountStatic(mux, logger)
 
-	logger.Info("装配完成（内存模式）", "channels", len(channelByType), "self_test_api_key", memory.SelfTestAPIKey)
-	return &App{Handler: mux, Config: cfg, Logger: logger, sink: obs}, nil
-}
-
-// Close 优雅关闭：flush 落库缓冲。
-func (a *App) Close(ctx context.Context) error {
-	if a.sink != nil {
-		return a.sink.Close(ctx)
+	closers := append([]func(context.Context) error{}, c.closers...)
+	if c.sink != nil {
+		closers = append(closers, c.sink.Close)
 	}
-	return nil
+	return &App{Handler: mux, Config: cfg, Logger: logger, closers: closers}, nil
 }
 
-// loadPoolKeys 把各通道的 active Key 加载进选择器。
+// ensureAdmin 在真实库首次启动且无用户时，创建默认管理员，保证可登录。
+func ensureAdmin(ctx context.Context, cfgStore store.ConfigStore, logger *slog.Logger) {
+	const email = "admin@claude-gate.io"
+	if _, err := cfgStore.GetUserByEmail(ctx, email); err == nil {
+		return
+	} else if !errors.Is(err, store.ErrNotFound) {
+		logger.Warn("检查默认管理员失败", "err", err)
+		return
+	}
+	if err := cfgStore.CreateUser(ctx, &domain.User{Email: email, PasswordHash: auth.HashSecret("admin123"), Role: "admin"}); err != nil {
+		logger.Warn("创建默认管理员失败", "err", err)
+		return
+	}
+	logger.Info("已创建默认管理员", "email", email, "password", "admin123（请尽快修改）")
+}
+
 func loadPoolKeys(ctx context.Context, cfgStore store.ConfigStore, pool *keypool.MemoryPool) {
 	chs, err := cfgStore.ListChannels(ctx)
 	if err != nil {
@@ -142,7 +252,6 @@ func loadPoolKeys(ctx context.Context, cfgStore store.ConfigStore, pool *keypool
 	}
 }
 
-// mountStatic 在存在前端构建产物时托管 SPA（带 history fallback）。
 func mountStatic(mux *http.ServeMux, logger *slog.Logger) {
 	dir := firstExisting("web/dist", "../web/dist", "/app/web")
 	if dir == "" {
@@ -151,7 +260,6 @@ func mountStatic(mux *http.ServeMux, logger *slog.Logger) {
 	}
 	fs := http.FileServer(http.Dir(dir))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// 静态文件存在则直接返回，否则回退 index.html（前端路由）
 		path := filepath.Join(dir, filepath.Clean(r.URL.Path))
 		if st, err := os.Stat(path); err == nil && !st.IsDir() {
 			fs.ServeHTTP(w, r)
@@ -160,6 +268,33 @@ func mountStatic(mux *http.ServeMux, logger *slog.Logger) {
 		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
 	})
 	logger.Info("已托管前端静态产物", "dir", dir)
+}
+
+// parseCHDSN 从 clickhouse://user:pass@host:9000/db 解析出连接参数。
+func parseCHDSN(dsn string) (addr, db, user, pass string) {
+	addr, db = "localhost:9000", "claude_gate"
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return
+	}
+	if u.Host != "" {
+		addr = u.Host
+	}
+	if p := strings.TrimPrefix(u.Path, "/"); p != "" {
+		db = p
+	}
+	if u.User != nil {
+		user = u.User.Username()
+		pass, _ = u.User.Password()
+	}
+	return
+}
+
+func encKeyOf(cfg config.Config) string {
+	if cfg.Auth.EncryptionKey != "" {
+		return cfg.Auth.EncryptionKey
+	}
+	return "claude-gate-dev-encryption-key"
 }
 
 func firstExisting(paths ...string) string {

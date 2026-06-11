@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,9 +30,17 @@ func main() {
 	logger := newLogger(cfg.Log)
 	slog.SetDefault(logger)
 
-	// 装配整套服务（内存模式：零外部依赖即可端到端运行）。
-	// 接入真实 PG/CH/Redis/S3 时在 app 内切换存储实现即可。
-	application, err := app.BuildMemory(cfg, logger)
+	// 装配整套服务：CG_STORE=real 连真实 PG/Redis/ClickHouse/S3（数据落库）；
+	// 默认 memory，零外部依赖即可端到端运行与自测。
+	storeMode := strings.ToLower(os.Getenv("CG_STORE"))
+	var application *app.App
+	if storeMode == "real" {
+		logger.Info("存储模式：real（真实 PG/Redis/ClickHouse/S3）")
+		application, err = app.BuildReal(context.Background(), cfg, logger)
+	} else {
+		logger.Info("存储模式：memory（内存 + 种子数据，零依赖）")
+		application, err = app.BuildMemory(cfg, logger)
+	}
 	if err != nil {
 		logger.Error("装配失败", "err", err)
 		os.Exit(1)
