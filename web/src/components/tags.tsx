@@ -5,9 +5,8 @@ import type { CacheStrategyType, ChannelType, KeyStatus } from '../api/types'
 const channelLabel: Record<ChannelType, string> = {
   kiro: 'Kiro',
   official: '官方',
-  bedrock: 'Bedrock',
-  vertex: 'Vertex',
   relay: '中转',
+  custom: '本地',
 }
 
 /** 通道类型标签，颜色与大盘一致。 */
@@ -48,7 +47,6 @@ export function StatusTag({ success, code }: { success: boolean; code: number })
 
 const keyStatusMap: Record<KeyStatus, { color: string; label: string }> = {
   active: { color: 'success', label: '可用' },
-  cooldown: { color: 'warning', label: '冷却中' },
   disabled: { color: 'default', label: '已禁用' },
 }
 

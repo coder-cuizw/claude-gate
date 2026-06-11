@@ -46,49 +46,43 @@ func TestNoKeys(t *testing.T) {
 	}
 }
 
-func TestCooldownOn5xx(t *testing.T) {
-	p := New(5 * time.Minute)
-	keys := mkKeys()
-	p.Load(7, keys)
+// 中间层定位：disabled 的 Key 不被选中。
+func TestSkipDisabled(t *testing.T) {
+	p := New(0)
+	p.Load(7, []*domain.UpstreamKey{
+		{ID: 1, ChannelID: 7, Status: domain.KeyDisabled},
+		{ID: 2, ChannelID: 7, Status: domain.KeyActive},
+	})
+	k, err := p.Acquire(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.ID != 2 {
+		t.Fatalf("应跳过 disabled，选中 active(ID=2)，得到 %d", k.ID)
+	}
+}
+
+// 全部 disabled 时无可用 Key。
+func TestAllDisabled(t *testing.T) {
+	p := New(0)
+	p.Load(7, []*domain.UpstreamKey{{ID: 1, ChannelID: 7, Status: domain.KeyDisabled}})
+	if _, err := p.Acquire(context.Background(), 7); !errors.Is(err, domain.ErrNoUpstreamKey) {
+		t.Fatalf("全部 disabled 应返回 ErrNoUpstreamKey，得到 %v", err)
+	}
+}
+
+// 失败仅被动记录 last_error，不改变状态（不做号池管理/冷却）。
+func TestReleaseRecordsErrorOnly(t *testing.T) {
+	p := New(0)
+	p.Load(7, mkKeys())
 	k, _ := p.Acquire(context.Background(), 7)
 	p.Release(k, upstream.Result{Success: false, StatusCode: 503, Err: errors.New("boom")})
-	if k.Status != domain.KeyCooldown {
-		t.Fatalf("5xx 后应进入 cooldown, 状态 = %s", k.Status)
+	if k.Status != domain.KeyActive {
+		t.Fatalf("失败不应改变 Key 状态（中间层不做冷却），状态 = %s", k.Status)
 	}
 	if k.LastError == "" {
-		t.Fatal("应记录 last_error")
+		t.Fatal("应被动记录 last_error")
 	}
-}
-
-func TestCooldownRecovery(t *testing.T) {
-	p := New(time.Minute)
-	keys := []*domain.UpstreamKey{{ID: 1, ChannelID: 7, Status: domain.KeyActive}}
-	p.Load(7, keys)
-
-	// 用可控时钟把所有 Key 打入 cooldown
-	base := time.Now()
-	p.now = func() time.Time { return base }
-	k, _ := p.Acquire(context.Background(), 7)
-	p.Release(k, upstream.Result{StatusCode: 429})
-	if _, err := p.Acquire(context.Background(), 7); !errors.Is(err, domain.ErrNoUpstreamKey) {
-		t.Fatal("cooldown 期间应无可用 Key")
-	}
-
-	// 时间前进超过 cooldown，应自动恢复
-	p.now = func() time.Time { return base.Add(2 * time.Minute) }
-	if _, err := p.Acquire(context.Background(), 7); err != nil {
-		t.Fatalf("cooldown 到期后应恢复可用: %v", err)
-	}
-}
-
-func TestReleaseSuccessNoCooldown(t *testing.T) {
-	p := New(time.Minute)
-	keys := mkKeys()
-	p.Load(7, keys)
-	k, _ := p.Acquire(context.Background(), 7)
-	p.Release(k, upstream.Result{Success: true, StatusCode: 200})
-	if k.Status != domain.KeyActive {
-		t.Fatal("成功调用不应改变 Key 状态")
-	}
-	p.Release(nil, upstream.Result{}) // nil 安全
+	p.Release(nil, upstream.Result{})                      // nil 安全
+	p.Release(k, upstream.Result{Success: true})           // 成功不记录
 }

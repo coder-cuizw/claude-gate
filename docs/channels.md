@@ -1,45 +1,42 @@
 # 通道接入指南
 
-claude-gate 把每种上游抽象为实现 `upstream.Adapter` 接口的 Adapter，差异收敛在 `internal/upstream/{type}/` 内，**禁止泄漏到主链路**（任务书 §10）。
+claude-gate **只做中间层**：把每种上游抽象为实现 `upstream.Adapter` 接口的 Adapter，差异收敛在 `internal/upstream/{type}/` 内，**禁止泄漏到主链路**（任务书 §10）。
 
-## 通道特性矩阵
+> 定位说明：本项目不做号池管理。上游 Key 由使用方在外部开好后**直接配置**进来，网关只负责在同通道的多把 active Key 间**轮询转发**，不维护刷新令牌、不做冷却/健康调度。
 
-| 维度 | Kiro（逆向 / 特殊） | Official（官方） | Bedrock | Vertex AI | Relay（第三方） |
-|------|------|------|------|------|------|
-| 认证方式 | SSO / 刷新令牌，需后台定期刷新 | API Key（Bearer） | AWS SigV4（AK/SK 或 Role） | GCP 服务账号 / OAuth | 透传或自定义 Bearer |
-| 请求/响应协议 | **私有协议，需双向转换** | 原生 Anthropic Messages | Bedrock Runtime（Anthropic schema） | Vertex（Anthropic schema） | Anthropic 兼容 |
-| 流式分帧 | **私有事件帧，需重封装为 SSE** | 标准 SSE | event stream → SSE | Vertex 流式 → SSE | 标准 SSE |
-| usage 来源 | 可能缺失，需提取 / 估算 | 响应原生返回 | 响应原生返回 | 响应原生返回 | 视上游而定 |
-| 凭证维护 | **需后台刷新令牌** | 无 | 凭证 / Role 轮换 | 凭证轮换 | 无 |
-| 转换复杂度 | **高** | 低 | 中 | 中 | 低～中 |
+## 当前支持的通道
 
-一句话差异化策略：**Kiro 是唯一需要在 Adapter 内重写协议与流式、并维护刷新令牌的通道；其余通道尽量复用官方 SDK / 标准 HTTP，只做薄封装**。云厂商通道（Bedrock / Vertex）优先用官方 SDK，不要手搓 SigV4 / OAuth 签名。
+| 维度 | Kiro | Official（官方） | Relay（第三方中转） | Custom（本地 mock） |
+|------|------|------|------|------|
+| 认证方式 | 直接配置好的 key（透传） | API Key（`x-api-key`） | 透传或自定义 Bearer | 无（本地合成） |
+| 请求/响应协议 | 当前**透传**（Anthropic 兼容） | 原生 Anthropic Messages | Anthropic 兼容 | 本地合成标准响应 |
+| 流式分帧 | 透传标准 SSE | 标准 SSE | 标准 SSE | 合成标准 SSE 序列 |
+| usage 来源 | 透传上游返回 | 响应原生返回 | 视上游而定 | 本地合成 |
+| 转换复杂度 | 低（透传） | 低 | 低～中 | — |
+
+> **Kiro 现阶段先做透传**：上游可能是你自己的号池（已开好 key），直接填入即可，无需刷新。后续如遇到 Kiro 私有协议导致的真实报错，再在 `internal/upstream/kiro/` 内逐步覆盖私有认证 / 协议 / 流式分帧 / usage 提取（任务书 §10：不臆测 wire format）。
+>
+> **Bedrock / Vertex 已按需移除**。如未来要接入，只需新增 Adapter 并在 registry 注册，主链路不变。
+
+## 通用 HTTP 透传
+
+official / kiro（当前）/ relay 都复用 `internal/upstream/httpproxy` 通用透传适配器，仅在认证头与默认 base_url 上做配置：
+
+| 通道 | 认证头 | 默认 base_url |
+|------|--------|---------------|
+| official | `x-api-key` | `https://api.anthropic.com` |
+| kiro | `Authorization: Bearer`（可在 config.auth_header 覆盖） | 通道 base_url |
+| relay | `Authorization: Bearer` | 通道 base_url |
 
 ## 新增通道的步骤
 
-1. 在 `internal/upstream/{type}/` 实现 `upstream.Adapter` 接口（`Name` / `Send` / `SendStream`）
+1. 在 `internal/upstream/{type}/` 实现 `upstream.Adapter` 接口（`Name` / `Send` / `SendStream`），或直接复用 `httpproxy.New(...)`
 2. 在 `internal/upstream/wire.go` 的 `DefaultRegistry` 注册工厂
 3. 在前端 `web/src/pages/Channels.tsx` 的 `ChannelConfigFields` 增加该类型的差异化配置字段
 4. 主链路、transformer、cache **无需改动**
 
-## ⚠️ Kiro 通道（私有逆向）
+## 上游 Key 选择（中间层）
 
-`KiroAdapter` 当前为**结构骨架**，需在内部完成（不外泄到主链路）：
-
-1. **认证与令牌刷新** —— 维护 Kiro 私有凭证，按需刷新；过期/失效转 Key 池 cooldown
-2. **请求转换** —— Anthropic Messages → Kiro 私有请求格式
-3. **响应/流式转换** —— Kiro 私有响应帧 → 标准 Anthropic SSE 事件序列（`message_start` / `content_block_delta` / `message_delta` / `message_stop` …）
-4. **usage 提取** —— 从 Kiro 响应提取/估算 token 数，回填统一 `Usage` 结构供策略引擎使用
-
-> 任务书 §10 明确要求：**Kiro 的具体协议细节（认证流程、端点、私有 schema、流式分帧格式）由项目方单独提供。遇到 Kiro 相关格式问题先停下来问，不要自行臆测 wire format**。
->
-> 因此本仓库的 `internal/upstream/kiro/kiro.go` 在缺少协议时统一返回明确错误（`Kiro 私有协议细节待项目方提供`），预留了 `RefreshFunc` 等可注入扩展点，待协议到位后补全。
-
-## Key 池调度策略（MVP）
-
-- 轮询选取 `status=active` 的 Key
-- 收到 429/5xx → `status=cooldown`，`cooldown_until = now + 5min`
-- 后台周期检查 cooldown 到期的 Key 自动恢复
-- 对刷新型凭证（Kiro）：后台在过期前主动刷新，刷新失败才进入 cooldown
-
-实现见 `internal/upstream/keypool`（含单元测试）。
+- 在同通道的多把 `status=active` Key 间**轮询**（`internal/upstream/keypool`，含单元测试）
+- 仅 `active` / `disabled` 两态，由后台手动启用/禁用
+- 调用失败仅被动记录 `last_error`，**不做冷却/降级/刷新**（号池生命周期由使用方在外部维护）

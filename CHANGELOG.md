@@ -6,6 +6,26 @@
 
 ### 新增
 
+- **端到端代理主链路打通**（§3 / §5.1）：认证→分组→改写→选 Adapter+取 Key→调上游→
+  缓存计费改写 usage→流式/非流回写→明细与 body 落库，curl 实测流式与非流均通过。
+- **存储层落地**：`store.ConfigStore` 全量 CRUD、`store.Cache`、`observ.Sink/BodyStore/MetricsReader`
+  接口 + **内存实现**（零外部依赖即可端到端运行与自测）；`authstore` 带缓存的 auth.Store 适配。
+- **管理 API**（§6 / §5.7）：JWT 登录鉴权、全资源 CRUD、统计（overview/timeseries/errors/by-channel）、
+  明细列表/详情、跨分组请求复现（Replay，含 dry_run）、客户 Key reveal。
+- **装配根 `app.BuildMemory`**：网关 + 管理 API + 静态前端组装为单一 Handler；`make run` 即起。
+- **请求明细增强**：列表按 new-api 风格分列展示 输入/输出/缓存创建/缓存读取；区分流式/非流并展示首字 TTFT。
+- **本地 mock 通道**：离线合成标准 Anthropic 响应与 SSE，用于端到端自测与演示。
+- 端到端测试（`internal/app`）+ 流式 goroutine 取消测试（§11.5）。
+
+### 变更 / 移除
+
+- **只做中间层**：移除号池管理（冷却状态机、令牌刷新、健康调度），`keypool` 简化为 active Key 轮询；
+  `upstream_keys` 移除 `cooldown_until` / `refreshed_at` 列，仅保留 active/disabled。
+- **Kiro 改为透传**：不再臆测私有协议，抽出通用 `httpproxy` 适配器供 official/kiro/relay 复用；
+  待真实报错后再在 `internal/upstream/kiro/` 内适配。
+- **移除 Bedrock / Vertex 通道**（含适配器目录、domain 常量、迁移与前端引用）。
+- **默认端口改为 `:8791`**，避免与常见服务（8080 等）冲突。
+
 - **客户 API Key 支持重复查看**：明文经 AES-256-GCM 可逆加密存储（`api_keys.key_encrypted`），
   管理后台可随时「查看密钥」并复制，热路径仍用 `key_hash` 校验不受影响。
   - 后端：`internal/auth/crypto.go`（AES-256-GCM 加解密 + 单测）、新增迁移 `0002_apikey_encrypted`、

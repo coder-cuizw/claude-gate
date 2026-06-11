@@ -1,5 +1,5 @@
-import { App, Button, Card, Descriptions, Form, Input, Modal, Segmented, Select, Switch, Table, Tag, Tooltip } from 'antd'
-import { PlusOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons'
+import { App, Button, Card, Form, Input, Modal, Segmented, Select, Switch, Table, Tag } from 'antd'
+import { PlusOutlined, SettingOutlined } from '@ant-design/icons'
 import { useState } from 'react'
 import { ChannelTag, KeyStatusTag } from '../components/tags'
 import { useChannels, useUpstreamKeys } from '../api/queries'
@@ -12,10 +12,9 @@ function ChannelConfigFields({ type }: { type: ChannelType }) {
     case 'kiro':
       return (
         <>
-          <Form.Item label="SSO Start URL" name={['config', 'sso_start_url']}><Input placeholder="https://sso.kiro.internal/start" /></Form.Item>
-          <Form.Item label="Region" name={['config', 'region']}><Input placeholder="us-east-1" /></Form.Item>
-          <Form.Item label="令牌刷新端点" name={['config', 'token_refresh_endpoint']}><Input placeholder="/oauth/token" /></Form.Item>
-          <Tag color="warning" style={{ marginBottom: 8 }}>Kiro 为私有逆向通道：认证/协议/流式/令牌刷新由 KiroAdapter 内部处理</Tag>
+          <Form.Item label="Base URL" name="base_url"><Input placeholder="https://prod.kiro.internal" /></Form.Item>
+          <Form.Item label="鉴权头" name={['config', 'auth_header']} tooltip="透传时凭证写入的请求头，默认 Authorization"><Input placeholder="Authorization" /></Form.Item>
+          <Tag color="default" style={{ marginBottom: 8 }}>当前为透传：号池由外部维护，直接填好 key 即可，无需刷新；后续按真实报错再做私有协议适配</Tag>
         </>
       )
     case 'official':
@@ -23,22 +22,6 @@ function ChannelConfigFields({ type }: { type: ChannelType }) {
         <>
           <Form.Item label="Base URL" name="base_url"><Input placeholder="https://api.anthropic.com" /></Form.Item>
           <Form.Item label="anthropic-version" name={['config', 'anthropic_version']}><Input placeholder="2023-06-01" /></Form.Item>
-        </>
-      )
-    case 'bedrock':
-      return (
-        <>
-          <Form.Item label="AWS Region" name={['config', 'region']}><Input placeholder="us-east-1" /></Form.Item>
-          <Form.Item label="anthropic-version" name={['config', 'anthropic_version']}><Input placeholder="bedrock-2023-05-31" /></Form.Item>
-          <Tag color="default">凭证：AK/SK 或 Role，走 aws-sdk-go-v2 官方签名</Tag>
-        </>
-      )
-    case 'vertex':
-      return (
-        <>
-          <Form.Item label="GCP Project ID" name={['config', 'project_id']}><Input placeholder="claude-gate-prod" /></Form.Item>
-          <Form.Item label="Region" name={['config', 'region']}><Input placeholder="us-east5" /></Form.Item>
-          <Tag color="default">凭证：服务账号 JSON，走 GCP 官方鉴权</Tag>
         </>
       )
     case 'relay':
@@ -50,22 +33,31 @@ function ChannelConfigFields({ type }: { type: ChannelType }) {
           </Form.Item>
         </>
       )
+    default:
+      return null
   }
 }
 
-function KeyPool({ channelId, channelType }: { channelId: number; channelType: ChannelType }) {
+function KeyPool({ channelId }: { channelId: number }) {
   const keys = useUpstreamKeys(channelId)
   const columns = [
     { title: 'Key 名称', dataIndex: 'name', render: (v: string) => <span className="cg-mono" style={{ fontSize: 12 }}>{v}</span> },
     { title: '状态', dataIndex: 'status', width: 100, render: (s: UpstreamKey['status']) => <KeyStatusTag status={s} /> },
-    { title: '最近使用', dataIndex: 'last_used_at', width: 160, render: (v?: string | null) => (v ? fmtDateTime(v) : '—') },
-    ...(channelType === 'kiro'
-      ? [{ title: '令牌刷新', dataIndex: 'refreshed_at', width: 160, render: (v?: string | null) => (v ? <Tooltip title="后台主动刷新刷新型凭证"><Tag color="processing">{fmtDateTime(v)}</Tag></Tooltip> : '—') }]
-      : []),
+    { title: '最近使用', dataIndex: 'last_used_at', width: 168, render: (v?: string | null) => (v ? fmtDateTime(v) : '—') },
     { title: '最近错误', dataIndex: 'last_error', ellipsis: true, render: (v?: string) => (v ? <span style={{ color: '#C0492F', fontSize: 12 }}>{v}</span> : <span style={{ color: 'var(--cg-text-tertiary,#928e85)' }}>—</span>) },
+    {
+      title: '操作', key: 'op', width: 130,
+      render: (_: unknown, k: UpstreamKey) => (
+        <Switch size="small" checked={k.status === 'active'} checkedChildren="启用" unCheckedChildren="禁用" />
+      ),
+    },
   ]
   return (
     <div style={{ padding: '4px 0' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <span style={{ fontSize: 12.5, color: 'var(--cg-text-secondary)' }}>多把 Key 间轮询转发；号池由外部维护，这里只做启用/禁用</span>
+        <Button size="small" icon={<PlusOutlined />}>添加 Key</Button>
+      </div>
       <Table size="small" rowKey="id" loading={keys.isLoading} columns={columns} dataSource={keys.data ?? []} pagination={false} />
     </div>
   )
@@ -116,7 +108,7 @@ export function Channels() {
     <Card
       className="cg-soft-card"
       styles={{ body: { padding: 18 } }}
-      title={<span style={{ color: 'var(--cg-text-secondary)', fontSize: 13 }}>各通道差异由上游适配层吸收；展开行查看 Key 池与令牌状态</span>}
+      title={<span style={{ color: 'var(--cg-text-secondary)', fontSize: 13 }}>claude-gate 只做中间层：上游 Key 直接配置、多把轮询；展开行管理 Key</span>}
       extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => { setFormType('kiro'); setOpen(true) }}>新建通道</Button>}
     >
       <Table<Channel>
@@ -126,7 +118,7 @@ export function Channels() {
         dataSource={channels.data ?? []}
         pagination={false}
         expandable={{
-          expandedRowRender: (c) => <KeyPool channelId={c.id} channelType={c.type} />,
+          expandedRowRender: (c) => <KeyPool channelId={c.id} />,
           defaultExpandedRowKeys: [1],
         }}
       />
@@ -146,8 +138,6 @@ export function Channels() {
           options={[
             { label: 'Kiro', value: 'kiro' },
             { label: '官方', value: 'official' },
-            { label: 'Bedrock', value: 'bedrock' },
-            { label: 'Vertex', value: 'vertex' },
             { label: '中转', value: 'relay' },
           ]}
           style={{ marginBottom: 18 }}
@@ -155,13 +145,6 @@ export function Channels() {
         <Form form={form} layout="vertical">
           <Form.Item label="通道名称" name="name"><Input placeholder="例如：Kiro 主通道" /></Form.Item>
           <ChannelConfigFields type={formType} />
-          <Descriptions size="small" column={1} style={{ marginTop: 8 }}>
-            <Descriptions.Item label={<span style={{ color: 'var(--cg-text-secondary)' }}>提示</span>}>
-              <Button size="small" icon={<ReloadOutlined />} disabled={formType !== 'kiro'}>
-                立即刷新令牌
-              </Button>
-            </Descriptions.Item>
-          </Descriptions>
         </Form>
       </Modal>
     </Card>

@@ -6,12 +6,11 @@ import "time"
 type ChannelType string
 
 const (
-	ChannelKiro     ChannelType = "kiro"     // 逆向私有通道，需重度特殊处理
+	ChannelKiro     ChannelType = "kiro"     // 逆向私有通道，当前先做透传
 	ChannelOfficial ChannelType = "official" // Claude 官方 API
-	ChannelBedrock  ChannelType = "bedrock"  // AWS Bedrock
-	ChannelVertex   ChannelType = "vertex"   // Google Vertex AI
 	ChannelRelay    ChannelType = "relay"    // Anthropic 兼容第三方中转
-	ChannelCustom   ChannelType = "custom"   // 自定义
+	ChannelCustom   ChannelType = "custom"   // 自定义 / 本地 mock 合成通道
+	// 注：Bedrock / Vertex 已按需移除；后续接入只需新增 Adapter 并在 registry 注册。
 )
 
 // KeyStatus 表示上游 Key 的可用状态。
@@ -20,7 +19,6 @@ type KeyStatus string
 const (
 	KeyActive   KeyStatus = "active"
 	KeyDisabled KeyStatus = "disabled"
-	KeyCooldown KeyStatus = "cooldown"
 )
 
 // User 管理后台用户。
@@ -46,16 +44,18 @@ type UpstreamChannel struct {
 }
 
 // UpstreamKey 上游凭证。CredentialEncrypted 为 AES 加密存储，内容随通道而异。
+//
+// 定位：claude-gate 只做中间层，不做号池管理。上游 Key 由使用方在外部开好后
+// 直接填入；网关仅在同通道多把 Key 间做简单轮询转发，不维护刷新令牌、不做
+// 冷却/健康调度等账号池生命周期管理。
 type UpstreamKey struct {
 	ID                  int64      `json:"id"`
 	ChannelID           int64      `json:"channel_id"`
 	Name                string     `json:"name"`
 	CredentialEncrypted string     `json:"-"`
-	Status              KeyStatus  `json:"status"`
-	CooldownUntil       *time.Time `json:"cooldown_until,omitempty"`
+	Status              KeyStatus  `json:"status"` // active / disabled
 	LastError           string     `json:"last_error,omitempty"`
 	LastUsedAt          *time.Time `json:"last_used_at,omitempty"`
-	RefreshedAt         *time.Time `json:"refreshed_at,omitempty"` // 刷新型凭证（Kiro）的最近刷新时间
 	CreatedAt           time.Time  `json:"created_at"`
 }
 

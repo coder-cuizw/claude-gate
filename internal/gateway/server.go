@@ -23,7 +23,8 @@ import (
 // Server 是网关 HTTP 服务。
 type Server struct {
 	logger *slog.Logger
-	ready  func() bool // 就绪探针：依赖（PG/CH/Redis）是否就绪
+	ready  func() bool  // 就绪探针：依赖（PG/CH/Redis）是否就绪
+	proxy  ProxyHandler // 代理引擎；为 nil 时 /v1/messages 返回未接入提示
 }
 
 // NewServer 构造网关服务。ready 为 nil 时默认始终就绪。
@@ -37,13 +38,21 @@ func NewServer(logger *slog.Logger, ready func() bool) *Server {
 	return &Server{logger: logger, ready: ready}
 }
 
-// Handler 返回组装好路由的 http.Handler。
-func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
+// SetProxy 注入代理引擎，启用真实的 /v1/messages 与 /v1/models。
+func (s *Server) SetProxy(p ProxyHandler) { s.proxy = p }
+
+// Mount 把网关路由注册到给定 mux，便于与管理 API、静态资源共用一个 mux。
+func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("POST /v1/messages", s.withTrace(s.handleMessages))
 	mux.HandleFunc("GET /v1/models", s.withTrace(s.handleModels))
+}
+
+// Handler 返回仅含网关路由的 http.Handler（独立运行时使用）。
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	s.Mount(mux)
 	return mux
 }
 
@@ -77,19 +86,23 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 //	选 Adapter(registry) + 取 Key(keypool) → 调上游 → 缓存计费(cache) →
 //	流式/非流式回写 → 明细落库(observ)
 func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
+	if s.proxy != nil {
+		s.proxy.ServeMessages(w, r)
+		return
+	}
 	traceID := observ.TraceID(r.Context())
 	if r.Header.Get("Authorization") == "" {
 		writeError(w, traceID, domain.ErrMissingAPIKey)
 		return
 	}
-	// 主链路依赖存储/上游通道的真实接入，骨架阶段统一返回结构化错误，
-	// 保证"任何阶段失败都能返回结构化错误 JSON"（任务书 §5.1 验收）。
-	writeError(w, traceID, domain.ErrInternal.WithMessage(
-		"代理主链路依赖 PG/ClickHouse/Redis/上游通道接入，请先完成 M1 存储与上游配置"))
+	writeError(w, traceID, domain.ErrInternal.WithMessage("代理引擎未注入（请通过 app 装配后启动）"))
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	// 模型列表来源于 model_mappings 表，骨架阶段返回空列表结构。
+	if s.proxy != nil {
+		s.proxy.ServeModels(w, r)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": []any{}})
 }
 

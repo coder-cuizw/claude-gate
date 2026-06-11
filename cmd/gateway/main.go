@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/claude-gate/claude-gate/internal/app"
 	"github.com/claude-gate/claude-gate/internal/config"
-	"github.com/claude-gate/claude-gate/internal/gateway"
 )
 
 func main() {
@@ -29,10 +29,16 @@ func main() {
 	logger := newLogger(cfg.Log)
 	slog.SetDefault(logger)
 
-	srv := gateway.NewServer(logger, func() bool { return true })
+	// 装配整套服务（内存模式：零外部依赖即可端到端运行）。
+	// 接入真实 PG/CH/Redis/S3 时在 app 内切换存储实现即可。
+	application, err := app.BuildMemory(cfg, logger)
+	if err != nil {
+		logger.Error("装配失败", "err", err)
+		os.Exit(1)
+	}
 	httpServer := &http.Server{
 		Addr:    cfg.Server.Addr,
-		Handler: srv.Handler(),
+		Handler: application.Handler,
 	}
 
 	// 启动 HTTP 服务
@@ -54,6 +60,9 @@ func main() {
 	defer cancel()
 	if err := httpServer.Shutdown(ctx); err != nil {
 		logger.Error("优雅关闭超时", "err", err)
+	}
+	if err := application.Close(ctx); err != nil {
+		logger.Error("关闭落库缓冲失败", "err", err)
 	}
 	logger.Info("claude-gate 已退出")
 }

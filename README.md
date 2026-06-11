@@ -2,9 +2,10 @@
 
 # claude-gate
 
-**面向 Claude 系列模型的可编程中转网关**
+**面向 Claude 系列模型的可编程中转网关（中间层）**
 
-统一接入 Kiro / 官方 / Bedrock / Vertex / 第三方中转等异构上游，对客户暴露同一套 Anthropic Messages 协议。
+统一接入 Kiro / 官方 / 第三方中转等上游，对客户暴露同一套 Anthropic Messages 协议。
+只做中间层：上游 Key 直接配置、多把轮询，不做号池管理。
 
 </div>
 
@@ -15,7 +16,7 @@
 `claude-gate` 把"通道（channel）"抽象为可插拔的 **Adapter**，解决四个核心痛点：
 
 1. **多通道统一接入与隔离** —— 异构上游统一成同一套对外协议，按分组隔离与路由
-2. **通道差异化适配** —— Kiro 等私有通道与官方 / 云厂商通道走不同认证与协议，由 Adapter 层屏蔽
+2. **通道差异化适配** —— 各通道差异由 Adapter 层屏蔽；Kiro 当前先做透传，后续按真实报错再适配私有协议
 3. **可定制的缓存计费** —— 按分组配置 `cache_creation` / `cache_read` / `input` 的计算方式（透传 / 百分比 / 固定值 / 公式）
 4. **错误请求的可观测与可复现** —— 任何失败请求 100% 还原 + 一键重放
 
@@ -67,8 +68,8 @@ PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node scripts/screenshots.mjs
 ```bash
 make build        # 编译 bin/gateway 与 bin/migrate
 make test         # 运行全部单元测试
-make run          # 启动网关，默认 :8080
-curl localhost:8080/healthz
+make run          # 启动网关，默认 :8791
+curl localhost:8791/healthz
 ```
 
 ### 全套依赖（docker-compose）
@@ -104,28 +105,35 @@ claude-gate/
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
+| 端到端代理主链路（§3 / §5.1） | ✅ 完成 | 认证→分组→改写→选 Adapter+取 Key→调上游→计费改写→流式/非流回写→落库，curl 实测通过 |
 | 缓存计费策略引擎（§5.3 ⭐） | ✅ 完成 | 四种策略 + 公式引擎，单测覆盖率 **96.7%** |
 | Transformer 流水线（§5.4） | ✅ 完成 | 流水线 + 四个改写器 + 单测 |
-| API Key 解析 / 分组解析（§5.2） | ✅ 完成 | 区分四类失败原因 + 单测 |
-| 上游 Key 池调度（§5.5） | ✅ 完成 | 轮询 + cooldown + 自动恢复 + 单测 |
-| 网关 HTTP 入口（§5.1） | ✅ 骨架 | 健康/就绪检查、trace_id 贯穿、结构化错误 |
-| OfficialAdapter（§5.5） | ✅ 实现 | 标准 Messages 协议 + SSE 解析 |
+| API Key 解析 / 分组解析（§5.2） | ✅ 完成 | 区分四类失败原因 + 热路径缓存 + 单测 |
+| 上游 Key 选择（§5.5，中间层） | ✅ 完成 | active Key 轮询转发（**不做号池管理**）+ 单测 |
+| OfficialAdapter / KiroAdapter（透传）/ RelayAdapter | ✅ 完成 | 复用通用 httpproxy；Kiro 当前透传 |
+| 本地 mock 通道 | ✅ 完成 | 离线合成响应，端到端自测/演示用 |
+| 管理 API（§6 / §5.7） | ✅ 完成 | JWT + 全资源 CRUD + 统计 + 明细/详情 + 复现 + Key reveal |
+| 存储层（接口 + 内存实现） | ✅ 完成 | `ConfigStore`/`Cache`/`Sink`/`BodyStore`/`MetricsReader` + 内存实现，零依赖可自测 |
 | 前端控制台（§7，9 个页面） | ✅ 完成 | Claude 风格 + 明暗自适应 + mock 数据可独立运行 |
 | 数据库迁移（§4） | ✅ 完成 | PG + ClickHouse 建表脚本 |
-| **KiroAdapter（§5.5 ⭐）** | 🚧 骨架 | **私有协议待项目方提供 wire format，按任务书 §10 不臆测** |
-| 存储实现（PG/CH/Redis/S3 落地） | 🚧 接口就绪 | 接口与桩已定义，待接入真实驱动 |
-| Bedrock / Vertex / Relay（M5） | 🚧 占位 | 接口与目录就绪，待用官方 SDK 实现 |
-| 管理 API CRUD（§6） | 🚧 占位 | 前端已用 mock 跑通，后端 handler 待接入存储 |
+| 存储真实驱动（PG/CH/Redis/S3） | 🚧 待接 | 同接口可接真实驱动；内存实现已覆盖全部功能与自测 |
+| **KiroAdapter 私有协议** | 🚧 透传中 | 当前先透传；按真实报错再适配（任务书 §10 不臆测 wire format） |
 
-> ⚠️ **关于 Kiro**：任务书 §10 明确要求"Kiro 私有协议细节由项目方提供，遇到格式问题先问、不要臆测 wire format"。因此 `KiroAdapter` 只给出结构骨架与各处理环节的清晰占位（认证/令牌刷新、请求转换、流式重封装、usage 提取），待项目方提供真实协议后补全。
+> 说明：后端默认以**内存模式**装配（`app.BuildMemory`），零外部依赖即可 `make run` 端到端跑通并自测；接入真实 PG/CH/Redis/S3 时实现同一组接口后在 app 内切换即可，主链路与管理 API 无需改动。
+>
+> **Bedrock / Vertex 已按需移除**；**号池管理、令牌刷新、冷却调度**按"只做中间层"定位移除。
 
-## 测试
+## 测试 / 自测
 
 ```bash
-go test ./... -cover
+go test ./... -cover     # 全部单元 + 端到端测试
+make run                 # 内存模式启动（默认 :8791），随后可 curl 自测
 ```
 
-核心逻辑（cache / transformer / auth / keypool）均有单元测试，缓存引擎覆盖率 96.7%（任务书要求 >90%）。
+- 核心逻辑（cache / transformer / auth / keypool）均有单测，缓存引擎覆盖率 **96.7%**
+- `internal/app` 端到端测试：登录 / 鉴权 / 流式+非流代理 / reveal / 统计
+- 流式 goroutine 取消测试（§11.5），无泄漏
+- curl 实测：登录→CRUD→流式+非流 `/v1/messages`→统计→明细详情→跨分组复现→Key reveal 全通
 
 ## 文档
 

@@ -69,7 +69,7 @@ services:
       CG_JWT_SECRET: please-change-me-in-prod
       CG_LOG_LEVEL: info
     ports:
-      - "8080:8080"
+      - "8791:8791"
 
   web:
     build:

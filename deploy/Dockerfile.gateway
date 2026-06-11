@@ -17,5 +17,5 @@ COPY --from=builder /out/gateway /usr/local/bin/gateway
 COPY --from=builder /out/migrate /usr/local/bin/migrate
 COPY migrations /app/migrations
 USER claude
-EXPOSE 8080
+EXPOSE 8791
 ENTRYPOINT ["/usr/local/bin/gateway"]

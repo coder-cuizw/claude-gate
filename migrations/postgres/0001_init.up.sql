@@ -13,7 +13,7 @@ CREATE TABLE users (
 CREATE TABLE upstream_channels (
     id BIGSERIAL PRIMARY KEY,
     name VARCHAR(128) NOT NULL,
-    type VARCHAR(32) NOT NULL,           -- kiro / official / bedrock / vertex / relay / custom
+    type VARCHAR(32) NOT NULL,           -- kiro / official / relay / custom
     base_url VARCHAR(512),
     config JSONB NOT NULL DEFAULT '{}',  -- 通道专属配置，按 type 不同而不同
     enabled BOOLEAN DEFAULT TRUE,
@@ -21,17 +21,15 @@ CREATE TABLE upstream_channels (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 上游 Key 池（凭证形态随通道类型而异）
+-- 上游 Key（中间层定位：直接配置好的凭证；不做号池管理，无冷却/刷新）
 CREATE TABLE upstream_keys (
     id BIGSERIAL PRIMARY KEY,
     channel_id BIGINT NOT NULL REFERENCES upstream_channels(id) ON DELETE CASCADE,
     name VARCHAR(128),
     credential_encrypted TEXT NOT NULL,   -- AES 加密存储；内容随通道而异
-    status VARCHAR(32) DEFAULT 'active',  -- active / disabled / cooldown
-    cooldown_until TIMESTAMPTZ,
+    status VARCHAR(32) DEFAULT 'active',  -- active / disabled
     last_error TEXT,
     last_used_at TIMESTAMPTZ,
-    refreshed_at TIMESTAMPTZ,             -- 刷新型凭证（如 Kiro）的最近刷新时间
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

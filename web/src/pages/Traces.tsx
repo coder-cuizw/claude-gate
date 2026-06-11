@@ -1,4 +1,4 @@
-import { Card, Input, Segmented, Select, Space, Table, Tag } from 'antd'
+import { Card, Input, Segmented, Select, Table, Tag } from 'antd'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -18,36 +18,47 @@ export function Traces() {
   const groups = useGroups()
   const traces = useTraces({ status, channel_type: channelType ?? 'all', group_id: groupId, page, page_size: pageSize })
 
+  const tokCell = (v: number) => <span className="cg-mono" style={{ fontSize: 12.5 }}>{fmtInt(v)}</span>
   const columns = [
     {
       title: '时间',
       dataIndex: 'request_at',
-      width: 168,
-      render: (v: string) => <span style={{ color: 'var(--cg-text-secondary)' }}>{fmtDateTime(v)}</span>,
+      width: 156,
+      fixed: 'left' as const,
+      render: (v: string) => <span style={{ color: 'var(--cg-text-secondary)', fontSize: 12.5 }}>{fmtDateTime(v)}</span>,
     },
+    { title: '通道', dataIndex: 'channel_type', width: 78, render: (t: TraceListItem['channel_type']) => <ChannelTag type={t} /> },
+    { title: '分组', dataIndex: 'group_name', width: 150, ellipsis: true },
+    { title: '模型', dataIndex: 'model', width: 184, ellipsis: true, render: (m: string) => <span className="cg-mono" style={{ fontSize: 11.5 }}>{m}</span> },
     {
-      title: 'Trace ID',
-      dataIndex: 'trace_id',
-      width: 150,
-      render: (v: string) => <span className="cg-mono" style={{ fontSize: 12 }}>{v.slice(0, 12)}…</span>,
+      title: '类型',
+      key: 'streaming',
+      width: 84,
+      render: (_: unknown, r: TraceListItem) =>
+        r.is_streaming ? (
+          <Tag icon={<ThunderboltOutlined />} color="processing" style={{ borderRadius: 6 }}>流式</Tag>
+        ) : (
+          <Tag style={{ borderRadius: 6 }}>非流</Tag>
+        ),
     },
-    { title: '分组', dataIndex: 'group_name', ellipsis: true },
-    { title: '通道', dataIndex: 'channel_type', width: 90, render: (t: TraceListItem['channel_type']) => <ChannelTag type={t} /> },
-    { title: '模型', dataIndex: 'model', ellipsis: true, render: (m: string) => <span className="cg-mono" style={{ fontSize: 11.5 }}>{m}</span> },
     {
       title: '状态',
       key: 'status',
-      width: 118,
-      render: (_: unknown, r: TraceListItem) => (
-        <Space size={4}>
-          <StatusTag success={r.is_success} code={r.status_code} />
-          {r.is_streaming && <ThunderboltOutlined style={{ color: 'var(--cg-text-tertiary,#928e85)', fontSize: 12 }} title="流式" />}
-        </Space>
-      ),
+      width: 116,
+      render: (_: unknown, r: TraceListItem) => <StatusTag success={r.is_success} code={r.status_code} />,
     },
-    { title: 'TTFT', dataIndex: 'ttft_ms', width: 92, align: 'right' as const, render: (v: number) => fmtMs(v) },
-    { title: '耗时', dataIndex: 'duration_ms', width: 96, align: 'right' as const, render: (v: number) => `${(v / 1000).toFixed(1)} s` },
-    { title: 'Tokens', dataIndex: 'total_tokens', width: 100, align: 'right' as const, render: (v: number) => fmtInt(v) },
+    {
+      title: '首字',
+      dataIndex: 'ttft_ms',
+      width: 92,
+      align: 'right' as const,
+      render: (v: number, r: TraceListItem) =>
+        r.is_streaming ? <span style={{ color: 'var(--cg-accent,#C45A35)', fontWeight: 600 }}>{fmtMs(v)}</span> : <span style={{ color: 'var(--cg-text-tertiary,#928e85)' }}>{fmtMs(v)}</span>,
+    },
+    { title: '输入', dataIndex: ['billed_usage', 'input_tokens'], width: 86, align: 'right' as const, render: tokCell },
+    { title: '输出', dataIndex: ['billed_usage', 'output_tokens'], width: 86, align: 'right' as const, render: tokCell },
+    { title: '缓存创建', dataIndex: ['billed_usage', 'cache_creation_tokens'], width: 98, align: 'right' as const, render: tokCell },
+    { title: '缓存读取', dataIndex: ['billed_usage', 'cache_read_tokens'], width: 98, align: 'right' as const, render: tokCell },
   ]
 
   return (
@@ -71,8 +82,6 @@ export function Traces() {
           options={[
             { label: 'Kiro', value: 'kiro' },
             { label: '官方', value: 'official' },
-            { label: 'Bedrock', value: 'bedrock' },
-            { label: 'Vertex', value: 'vertex' },
             { label: '中转', value: 'relay' },
           ]}
         />
@@ -93,6 +102,7 @@ export function Traces() {
         loading={traces.isLoading}
         columns={columns}
         dataSource={traces.data?.items ?? []}
+        scroll={{ x: 1140 }}
         onRow={(r) => ({ onClick: () => navigate(`/traces/${r.trace_id}`), style: { cursor: 'pointer' } })}
         pagination={{
           current: page,

@@ -1,5 +1,5 @@
 import { App, Button, Card, Col, Descriptions, Form, Modal, Row, Select, Switch, Table, Tabs, Tag } from 'antd'
-import { ArrowLeftOutlined, RedoOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, RedoOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ChannelTag, StatusTag } from '../components/tags'
@@ -73,8 +73,15 @@ export function TraceDetailPage() {
               <Descriptions.Item label="模型"><span className="cg-mono" style={{ fontSize: 12 }}>{t.model}</span></Descriptions.Item>
               <Descriptions.Item label="客户 Key">{t.api_key_name}</Descriptions.Item>
               <Descriptions.Item label="上游 Key">{t.upstream_key_name}</Descriptions.Item>
-              <Descriptions.Item label="流式">{t.is_streaming ? <Tag color="processing">是</Tag> : <Tag>否</Tag>}</Descriptions.Item>
-              <Descriptions.Item label="TTFT / 耗时">{fmtMs(t.ttft_ms)} / {(t.duration_ms / 1000).toFixed(1)} s</Descriptions.Item>
+              <Descriptions.Item label="类型">
+                {t.is_streaming ? <Tag icon={<ThunderboltOutlined />} color="processing">流式</Tag> : <Tag>非流</Tag>}
+              </Descriptions.Item>
+              <Descriptions.Item label="首字 TTFT">
+                {t.is_streaming
+                  ? <span style={{ color: 'var(--cg-accent,#C45A35)', fontWeight: 600 }}>{fmtMs(t.ttft_ms)}</span>
+                  : <span style={{ color: 'var(--cg-text-secondary)' }}>{fmtMs(t.ttft_ms)}（非流）</span>}
+              </Descriptions.Item>
+              <Descriptions.Item label="总耗时">{(t.duration_ms / 1000).toFixed(1)} s</Descriptions.Item>
               {!t.is_success && (
                 <Descriptions.Item label="错误" span={2}>
                   <Tag color="error">{t.error_type}</Tag>

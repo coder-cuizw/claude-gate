@@ -11,31 +11,31 @@ import (
 //
 // 同时保留计费 usage 与上游真实 usage（任务书 §4.2 / §5.3）。
 type RequestRecord struct {
-	TraceID      string
-	APIKeyID     int64
-	GroupID      int64
-	ChannelID    int64
-	ChannelType  domain.ChannelType
-	UpstreamKeyID int64
-	Model        string
+	TraceID       string             `json:"trace_id"`
+	APIKeyID      int64              `json:"api_key_id"`
+	GroupID       int64              `json:"group_id"`
+	ChannelID     int64              `json:"channel_id"`
+	ChannelType   domain.ChannelType `json:"channel_type"`
+	UpstreamKeyID int64              `json:"upstream_key_id"`
+	Model         string             `json:"model"`
 
-	RequestAt    time.Time
-	FirstTokenAt *time.Time
-	CompletedAt  time.Time
-	TTFTMs       uint32
-	DurationMs   uint32
+	RequestAt    time.Time  `json:"request_at"`
+	FirstTokenAt *time.Time `json:"first_token_at,omitempty"`
+	CompletedAt  time.Time  `json:"completed_at"`
+	TTFTMs       uint32     `json:"ttft_ms"`
+	DurationMs   uint32     `json:"duration_ms"`
 
-	StatusCode   int
-	IsStreaming  bool
-	IsSuccess    bool
-	ErrorType    string
-	ErrorMessage string
+	StatusCode   int    `json:"status_code"`
+	IsStreaming  bool   `json:"is_streaming"`
+	IsSuccess    bool   `json:"is_success"`
+	ErrorType    string `json:"error_type,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
 
-	Billed   domain.Usage // 返回给客户的计费值
-	Upstream domain.Usage // 上游真实值
+	Billed   domain.Usage `json:"billed_usage"`   // 返回给客户的计费值
+	Upstream domain.Usage `json:"upstream_usage"` // 上游真实值
 
-	RequestBodyS3Key  string
-	ResponseBodyS3Key string
+	RequestBodyS3Key  string `json:"request_body_s3_key,omitempty"`
+	ResponseBodyS3Key string `json:"response_body_s3_key,omitempty"`
 }
 
 // Sink 是明细落库的统一出口。实现需保证异步、不反压主链路（任务书 §2.1）。
