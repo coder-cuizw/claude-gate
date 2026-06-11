@@ -23,6 +23,7 @@ import (
 	"github.com/claude-gate/claude-gate/internal/domain"
 	"github.com/claude-gate/claude-gate/internal/gateway"
 	"github.com/claude-gate/claude-gate/internal/observ"
+	"github.com/claude-gate/claude-gate/internal/ratelimit"
 	"github.com/claude-gate/claude-gate/internal/store"
 	"github.com/claude-gate/claude-gate/internal/store/authstore"
 	chstore "github.com/claude-gate/claude-gate/internal/store/clickhouse"
@@ -61,6 +62,7 @@ type components struct {
 	sink          observ.Sink
 	bodies        observ.BodyStore
 	metrics       observ.MetricsReader
+	limiter       ratelimit.Limiter
 	sampleSuccess float64
 	ready         func() bool
 	closers       []func(context.Context) error
@@ -89,12 +91,16 @@ func BuildMemory(cfg config.Config, logger *slog.Logger) (*App, error) {
 		firstGroup = gs[0].ID
 	}
 	obs.SeedDemo(channelByType, firstGroup)
+	limiter := ratelimit.NewMemory()
 
 	return assemble(cfg, logger, components{
-		cfgStore: cfgStore, cache: cache, sink: obs, bodies: obs, metrics: obs,
+		cfgStore: cfgStore, cache: cache, sink: obs, bodies: obs, metrics: obs, limiter: limiter,
 		sampleSuccess: 1.0, // 演示模式全量留存 body
-		ready:         func() bool { return true },
-		closers:       []func(context.Context) error{obs.Close},
+		ready: func() bool { return true },
+		// sink(obs).Close 由 assemble 统一追加；此处仅限流器
+		closers: []func(context.Context) error{
+			func(context.Context) error { limiter.Close(); return nil },
+		},
 	})
 }
 
@@ -149,9 +155,10 @@ func BuildReal(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Ap
 	logger.Info("已连接真实存储", "pg", true, "redis", cfg.Redis.Addr, "clickhouse", chAddr, "s3", cfg.S3.Endpoint)
 	return assemble(cfg, logger, components{
 		cfgStore: pg, cache: rds, sink: ch, bodies: s3s, metrics: ch,
+		limiter:       ratelimit.NewRedis(rds.Client()), // 分布式限流，复用 Redis 连接池
 		sampleSuccess: sample, ready: ready,
+		// sink(ch).Close 由 assemble 统一追加（flush CH 批写缓冲）；此处关连接池
 		closers: []func(context.Context) error{
-			ch.Close, // 先 flush 落库缓冲
 			func(context.Context) error { pg.Close(); return nil },
 			func(context.Context) error { return rds.Close() },
 		},
@@ -193,6 +200,12 @@ func assemble(cfg config.Config, logger *slog.Logger, c components) (*App, error
 		Logger:        logger,
 		SampleSuccess: c.sampleSuccess,
 		Timeout:       time.Duration(cfg.Server.RequestTimeout) * time.Second,
+
+		GlobalMaxInFlight:  cfg.Concurrency.GlobalMaxInFlight,
+		PerChannelInFlight: cfg.Concurrency.PerChannelInFlight,
+		Limiter:            c.limiter,
+		WorkerPoolSize:     cfg.Concurrency.WorkerPoolSize,
+		S3WriteRetry:       cfg.Sampling.S3WriteRetry,
 	})
 
 	mux := http.NewServeMux()
@@ -210,10 +223,12 @@ func assemble(cfg config.Config, logger *slog.Logger, c components) (*App, error
 	adminSrv.Mount(mux)
 	mountStatic(mux, logger)
 
-	closers := append([]func(context.Context) error{}, c.closers...)
+	// 关闭顺序：先 flush 代理落库队列（body→S3），再 flush 明细 Sink（→CH），最后关连接池
+	closers := []func(context.Context) error{proxy.Close}
 	if c.sink != nil {
 		closers = append(closers, c.sink.Close)
 	}
+	closers = append(closers, c.closers...)
 	return &App{Handler: mux, Config: cfg, Logger: logger, closers: closers}, nil
 }
 
