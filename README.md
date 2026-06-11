@@ -44,38 +44,43 @@
 
 ## 快速开始
 
-### 前端控制台（演示模式，无需后端）
+### 最快体验（内存模式，零外部依赖）
 
-控制台内置 mock 数据，可独立运行与截图：
+前端构建后由网关**同源托管**，通过 `/api/admin/*` 调真实后端（内存模式自带丰富种子数据）：
 
 ```bash
-cd web
-pnpm install
-pnpm dev          # 开发模式 http://localhost:5173
-# 或
-pnpm build && pnpm preview   # 生产构建预览 http://localhost:4173
+cd web && pnpm install && pnpm build   # 构建前端静态产物
+cd .. && make run                       # 启动网关（默认 :8791，内存模式 + 种子数据）
 ```
 
-任意账号密码即可登录。生成全部页面明暗截图：
+浏览器打开 http://localhost:8791 ，用 **admin@claude-gate.io / admin123** 登录。
+
+### 前端开发模式（连后端）
 
 ```bash
-cd web && pnpm preview &
-PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node scripts/screenshots.mjs
+cd web && pnpm dev    # http://localhost:5173；Vite 把 /api、/v1 代理到网关 :8791
 ```
 
-### 后端网关
+需同时运行网关（`make run`）作为后端。生成全部页面明暗截图（脚本真实登录后截图）：
 
 ```bash
-make build        # 编译 bin/gateway 与 bin/migrate
-make test         # 运行全部单元测试
-make run          # 启动网关，默认 :8791
-curl localhost:8791/healthz
+make run &
+cd web && CG_BASE=http://localhost:8791 node scripts/screenshots.mjs
 ```
 
-### 全套依赖（docker-compose）
+### 真实存储模式（docker-compose 一键起全套）
 
 ```bash
-cd deploy && docker compose up -d   # PG / ClickHouse / Redis / MinIO + 网关 + 前端
+cd deploy && docker compose up -d   # PG/CH/Redis/MinIO + 自动迁移 + 网关(real) + 前端
+```
+
+数据真正落库；首次启动自动建管理员（admin@claude-gate.io / admin123）并播种。
+
+### 后端单独构建 / 测试
+
+```bash
+make build   # 编译 bin/gateway 与 bin/migrate
+make test    # 全部单元测试
 ```
 
 ## 项目结构
@@ -119,8 +124,9 @@ claude-gate/
 | 异步落库 worker pool（§2.1 / §5.6） | ✅ 完成 | body+明细投递队列、队列满降级、S3 重试、优雅关闭 flush |
 | 计费 token 精确口径（§5.3） | ✅ 完成 | total 优先用上游真实输入侧 token，字节估算仅回退 |
 | 数据库迁移工具（§8） | ✅ 完成 | `cmd/migrate` 执行 PG/CH 迁移，版本记录幂等 |
-| 前端控制台（§7，9 个页面） | ✅ 完成 | Claude 风格 + 明暗自适应 + mock 数据可独立运行 |
-| 前端对接真实后端 | 🚧 待接 | 当前前端走内置 mock；后端 API 已就绪，替换 `web/src/api/queries.ts` 数据源即可 |
+| 前端控制台（§7，9 个页面） | ✅ 完成 | Claude 风格 + 明暗自适应 |
+| 前端对接真实后端 | ✅ 完成 | 全部走 `/api/admin/*`（JWT 登录 + 读写）；已删除 mock；读路径派生字段前端 join 补齐 |
+| 真实 Kiro 通道验证 | ✅ 完成 | 经管理 API 配置真实 Kiro，端到端透传跑通流式+非流，真实 usage 落库 |
 | **KiroAdapter 私有协议** | 🚧 透传中 | 当前先透传；按真实报错再适配（任务书 §10 不臆测 wire format） |
 
 > 说明：`CG_STORE=real` 时连真实 PG/Redis/ClickHouse/S3（`docker compose up` 一键起全套并自动迁移）；
