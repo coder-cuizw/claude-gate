@@ -200,6 +200,7 @@ func assemble(cfg config.Config, logger *slog.Logger, c components) (*App, error
 		Logger:        logger,
 		SampleSuccess: c.sampleSuccess,
 		Timeout:       time.Duration(cfg.Server.RequestTimeout) * time.Second,
+		EncKey:        encKey,
 
 		GlobalMaxInFlight:  cfg.Concurrency.GlobalMaxInFlight,
 		PerChannelInFlight: cfg.Concurrency.PerChannelInFlight,

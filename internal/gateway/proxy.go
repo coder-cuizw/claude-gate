@@ -44,6 +44,7 @@ type ProxyDeps struct {
 	Logger        *slog.Logger
 	SampleSuccess float64       // 成功请求 body 落盘采样率
 	Timeout       time.Duration // 全链路超时
+	EncKey        string        // 上游凭证解密口令（AES-256-GCM）
 
 	// 并发治理与限流（任务书 §2.1 / §5.2）
 	GlobalMaxInFlight  int               // 全局并发上限，超出快速 429（背压，不落库）
@@ -258,6 +259,7 @@ func (p *Proxy) ServeMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	if key != nil {
 		rec.UpstreamKeyID = key.ID
+		key = p.decryptKey(key)
 	}
 
 	cctx := cache.Context{Model: req.Model, TotalContextTokens: estimateTokens(&req)}
@@ -443,6 +445,21 @@ func retriable(err error) bool {
 	return de.Code == domain.ErrUpstreamFailure.Code || de.Code == domain.ErrTimeout.Code
 }
 
+// decryptKey 返回填充了明文凭证的 Key 副本（不修改池中共享的原对象）。
+// 解密失败时（如未加密的种子数据）回退使用原值。
+func (p *Proxy) decryptKey(k *domain.UpstreamKey) *domain.UpstreamKey {
+	if k == nil {
+		return nil
+	}
+	cp := *k
+	if p.d.EncKey != "" && k.CredentialEncrypted != "" {
+		if plain, err := auth.Decrypt(k.CredentialEncrypted, p.d.EncKey); err == nil {
+			cp.Credential = plain
+		}
+	}
+	return &cp
+}
+
 // contextTokens 计算计费 total：优先上游真实输入侧 token，回退字节估算。
 func contextTokens(up domain.Usage, req *domain.MessagesRequest) int {
 	if t := up.InputTokens + up.CacheReadTokens + up.CacheCreationTokens; t > 0 {
@@ -508,6 +525,7 @@ func (p *Proxy) Replay(ctx context.Context, groupID int64, body []byte, override
 	if err != nil {
 		return nil, err
 	}
+	key = p.decryptKey(key)
 	req.Stream = false
 	resp, err := adapter.Send(ctx, &req, key)
 	if err != nil {

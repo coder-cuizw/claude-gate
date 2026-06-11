@@ -7,9 +7,12 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
-    // 演示模式下前端走内置 mock，无需后端代理。
-    // 接入真实后端时，按需为 /api/admin 与 /v1 配置代理到网关（localhost:8080），
-    // 注意用正则 '^/api/admin' 等精确前缀，避免与前端路由 /api-keys 冲突。
+    // 开发时把后端接口代理到网关（默认 :8791）。用精确前缀 /api/admin 与 /v1，
+    // 避免与前端路由 /api-keys 冲突。可用 CG_GATEWAY 覆盖目标地址。
+    proxy: {
+      '/api/admin': { target: process.env.CG_GATEWAY || 'http://localhost:8791', changeOrigin: true },
+      '/v1': { target: process.env.CG_GATEWAY || 'http://localhost:8791', changeOrigin: true },
+    },
   },
   preview: {
     host: '0.0.0.0',

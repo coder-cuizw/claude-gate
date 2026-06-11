@@ -20,20 +20,25 @@ func New(ch *domain.UpstreamChannel) *httpproxy.Adapter {
 	base := ""
 	authHeader := "Authorization"
 	authScheme := "Bearer"
+	version := "2023-06-01"
 	if ch != nil {
 		base = strings.TrimRight(ch.BaseURL, "/")
-		// 允许通过 config 指定透传时的认证头，便于按实际上游调整
+		// 允许通过 config 指定透传时的认证头与协议版本，便于按实际上游调整
 		if h, ok := ch.Config["auth_header"].(string); ok && h != "" {
 			authHeader = h
 		}
 		if s, ok := ch.Config["auth_scheme"].(string); ok {
 			authScheme = s
 		}
+		if v, ok := ch.Config["anthropic_version"].(string); ok && v != "" {
+			version = v
+		}
 	}
 	return httpproxy.New(httpproxy.Options{
-		ChannelType: domain.ChannelKiro,
-		BaseURL:     base,
-		AuthHeader:  authHeader,
-		AuthScheme:  authScheme,
+		ChannelType:      domain.ChannelKiro,
+		BaseURL:          base,
+		AuthHeader:       authHeader,
+		AuthScheme:       authScheme,
+		AnthropicVersion: version,
 	})
 }

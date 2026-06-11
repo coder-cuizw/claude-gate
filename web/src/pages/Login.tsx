@@ -1,6 +1,8 @@
-import { Button, Card, Form, Input, Typography } from 'antd'
+import { App, Button, Card, Form, Input, Typography } from 'antd'
 import { LockOutlined, MailOutlined } from '@ant-design/icons'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { apiLogin } from '../api/client'
 import { Logo, Sunburst } from '../components/Logo'
 import { ThemeToggle } from '../components/ThemeToggle'
 import { useAuthStore } from '../store/auth'
@@ -8,14 +10,23 @@ import { resolveMode, systemPrefersDark, useThemeStore } from '../store/theme'
 
 export function Login() {
   const navigate = useNavigate()
+  const { message } = App.useApp()
   const login = useAuthStore((s) => s.login)
   const preference = useThemeStore((s) => s.preference)
   const dark = resolveMode(preference, systemPrefersDark()) === 'dark'
+  const [loading, setLoading] = useState(false)
 
-  const onFinish = (v: { email: string; password: string }) => {
-    // 演示环境：任意账号即可登录，签发一个本地 token
-    login('demo-token', { email: v.email || 'admin@claude-gate.io', role: 'admin' })
-    navigate('/dashboard')
+  const onFinish = async (v: { email: string; password: string }) => {
+    setLoading(true)
+    try {
+      const { token, user } = await apiLogin(v.email, v.password)
+      login(token, user)
+      navigate('/dashboard')
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '登录失败')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -40,20 +51,20 @@ export function Login() {
           </div>
 
           <Card className="cg-soft-card" style={{ borderRadius: 16 }} styles={{ body: { padding: 28 } }}>
-            <Form layout="vertical" requiredMark={false} onFinish={onFinish} initialValues={{ email: 'admin@claude-gate.io', password: 'demo-password' }}>
+            <Form layout="vertical" requiredMark={false} onFinish={onFinish} initialValues={{ email: 'admin@claude-gate.io', password: 'admin123' }}>
               <Form.Item name="email" label="邮箱" rules={[{ required: true, message: '请输入邮箱' }]}>
                 <Input size="large" prefix={<MailOutlined style={{ color: 'var(--cg-text-secondary)' }} />} placeholder="admin@claude-gate.io" />
               </Form.Item>
               <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]} style={{ marginBottom: 18 }}>
                 <Input.Password size="large" prefix={<LockOutlined style={{ color: 'var(--cg-text-secondary)' }} />} placeholder="••••••••••" />
               </Form.Item>
-              <Button type="primary" htmlType="submit" size="large" block style={{ fontWeight: 600 }}>
+              <Button type="primary" htmlType="submit" size="large" block loading={loading} style={{ fontWeight: 600 }}>
                 登录控制台
               </Button>
             </Form>
 
             <div style={{ marginTop: 18, textAlign: 'center', fontSize: 12.5, color: 'var(--cg-text-tertiary, #928e85)' }}>
-              演示环境：任意账号密码即可进入
+              默认管理员：admin@claude-gate.io / admin123
             </div>
           </Card>
 

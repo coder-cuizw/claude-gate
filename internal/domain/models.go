@@ -53,6 +53,7 @@ type UpstreamKey struct {
 	ChannelID           int64      `json:"channel_id"`
 	Name                string     `json:"name"`
 	CredentialEncrypted string     `json:"-"`
+	Credential          string     `json:"-"` // 运行时解密得到的明文凭证，不入库
 	Status              KeyStatus  `json:"status"` // active / disabled
 	LastError           string     `json:"last_error,omitempty"`
 	LastUsedAt          *time.Time `json:"last_used_at,omitempty"`
